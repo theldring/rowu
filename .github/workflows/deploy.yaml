@@ -1,0 +1,36 @@
+name: Build and Deploy to Azure
+
+on:
+  push:
+    branches:
+      - main  # Of de naam van je default branch
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Log in to ACR
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push image to ACR
+        run: |
+          docker build . -t ${{ secrets.ACR_LOGIN_SERVER }}/open-webui:${{ github.sha }}
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/open-webui:${{ github.sha }}
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          images: ${{ secrets.ACR_LOGIN_SERVER }}/open-webui:${{ github.sha }}
