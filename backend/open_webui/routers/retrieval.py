@@ -1468,6 +1468,17 @@ def save_docs_to_vector_db(
     log.debug(
         f"save_docs_to_vector_db: document {_get_docs_info(docs)} {collection_name}"
     )
+    
+    # --- START BYPASS VOOR MEDIA BESTANDEN ---
+    media_extensions = ('.mp4', '.m4a', '.mp3', '.wav', '.mpeg', '.webm', '.ogg')
+    for doc in docs:
+        doc_metadata = getattr(doc, "metadata", {})
+        doc_name = str(doc_metadata.get("name", "") or doc_metadata.get("title", "") or doc_metadata.get("source", "")).lower()
+        
+        if doc_name.endswith(media_extensions):
+            log.info(f"Media bestand gedetecteerd ({doc_name}). Skipping embeddings voor {collection_name}.")
+            return True # Breek de functie af, geen RAG processing.
+    # --- EINDE BYPASS VOOR MEDIA BESTANDEN ---
 
     # Check if entries with the same hash (metadata.hash) already exist
     if metadata and "hash" in metadata:
