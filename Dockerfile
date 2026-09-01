@@ -28,7 +28,7 @@ FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
 ARG BUILD_HASH
 
 # Increase the heap for the production frontend build.
-ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV NODE_OPTIONS="--max-old-space-size=12288"
 
 WORKDIR /app
 
