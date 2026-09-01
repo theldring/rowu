@@ -1661,17 +1661,13 @@ def save_docs_to_vector_db(
 
         return ', '.join(docs_info)
 
-
-
-        log.debug('save_docs_to_vector_db: document %s %s', _get_docs_info(docs), collection_name)
+    log.debug('save_docs_to_vector_db: document %s %s', _get_docs_info(docs), collection_name)
 
     media_extensions = ('.mp4', '.m4a', '.mp3', '.wav', '.mpeg', '.webm', '.ogg')
     for doc in docs:
         doc_metadata = getattr(doc, 'metadata', {})
         doc_name = str(
-            doc_metadata.get('name', '')
-            or doc_metadata.get('title', '')
-            or doc_metadata.get('source', '')
+            doc_metadata.get('name', '') or doc_metadata.get('title', '') or doc_metadata.get('source', '')
         ).lower()
 
         if doc_name.endswith(media_extensions):
@@ -2170,1227 +2166,1226 @@ async def process_text(
     log.debug('text_content: %s', text_content)
 
     config = await get_retrieval_config()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    result = await run_in_th
+    result = await run_in_threadpool(save_docs_to_vector_db, request, docs, collection_name, config, user=user)
+    if result:
+        await publish_event(
+            request,
+            EVENTS.RETRIEVAL_CONTENT_PROCESSED,
+            actor=user,
+            subject_id=collection_name,
+            subject_type='retrieval.collection',
+            data={'name': form_data.name, 'content_preview': text_content[:300]},
+        )
+        return {
+            'status': True,
+            'collection_name': collection_name,
+            'content': text_content,
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ERROR_MESSAGES.DEFAULT(),
+        )
+
+
+async def _fetch_url(url: str, max_size_mb: int | str | None) -> dict:
+    await asyncio.to_thread(validate_url, url)
+    max_bytes = None
+    if max_size_mb:
+        try:
+            max_bytes = int(max_size_mb) * 1024 * 1024
+        except (TypeError, ValueError):
+            max_bytes = None
+
+    async with get_ssrf_safe_session() as session:
+        async with session.get(
+            url, ssl=AIOHTTP_CLIENT_SESSION_SSL, allow_redirects=AIOHTTP_CLIENT_ALLOW_REDIRECTS
+        ) as response:
+            response.raise_for_status()
+
+            content_type = response.headers.get('Content-Type', '')
+            content_disposition = response.headers.get('Content-Disposition', '')
+            content_length = response.headers.get('Content-Length')
+            base_content_type = content_type.split(';')[0].strip().lower()
+            is_attachment = content_disposition.split(';')[0].strip().lower() == 'attachment'
+
+            chunks = []
+            total = 0
+
+            iterator = response.content.iter_chunked(64 * 1024)
+            first_chunk = await anext(iterator, b'')
+
+            if not is_attachment and base_content_type in {'text/html', 'application/xhtml+xml'}:
+                return {'kind': 'web'}
+
+            if not is_attachment and base_content_type in {'', 'application/octet-stream', 'binary/octet-stream'}:
+                sample = first_chunk[:4096].lstrip().lower()
+                if (
+                    sample.startswith((b'<!doctype html', b'<html', b'<head', b'<body', b'<?xml'))
+                    or b'<html' in sample[:1024]
+                ):
+                    return {'kind': 'web'}
+
+            if max_bytes and content_length:
+                try:
+                    if int(content_length) > max_bytes:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail=ERROR_MESSAGES.FILE_TOO_LARGE(size=f'{max_size_mb} MB'),
+                        )
+                except ValueError:
+                    pass
+
+            if first_chunk:
+                chunks.append(first_chunk)
+                total += len(first_chunk)
+                if max_bytes and total > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=ERROR_MESSAGES.FILE_TOO_LARGE(size=f'{max_size_mb} MB'),
+                    )
+
+            async for chunk in iterator:
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                total += len(chunk)
+                if max_bytes and total > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=ERROR_MESSAGES.FILE_TOO_LARGE(size=f'{max_size_mb} MB'),
+                    )
+
+            data = b''.join(chunks)
+
+            image_mime = None
+            try:
+                from PIL import Image
+
+                image = Image.open(io.BytesIO(data))
+                image.verify()
+                image_mime = Image.MIME.get(image.format) if image.format else None
+            except Exception:
+                image_mime = None
+
+            if base_content_type.startswith('image/') and image_mime is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=ERROR_MESSAGES.DEFAULT('Invalid image content'),
+                )
+
+            filename = ''
+            filename_star = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition, re.IGNORECASE)
+            filename_plain = re.search(r'filename="?([^";]+)"?', content_disposition, re.IGNORECASE)
+            if filename_star:
+                filename = unquote(filename_star.group(1))
+            elif filename_plain:
+                filename = filename_plain.group(1)
+            if not filename:
+                filename = os.path.basename(urlparse(url).path)
+            filename = os.path.basename(filename or 'download')
+
+            resolved_content_type = (
+                image_mime or base_content_type or mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+            )
+            if not os.path.splitext(filename)[1]:
+                filename = f'{filename}{mimetypes.guess_extension(resolved_content_type) or ".bin"}'
+
+            return {
+                'kind': 'file',
+                'data': data,
+                'filename': filename,
+                'content_type': resolved_content_type,
+            }
+
+
+@router.post('/process/url', response_model=ProcessUrlResponse)
+async def process_url(
+    request: Request,
+    form_data: ProcessUrlForm,
+    process: bool = Query(True, description='Whether to process and save the content'),
+    user=Depends(get_verified_user),
+):
+    try:
+        if is_youtube_url(form_data.url):
+            result = await process_web(request, form_data, process=process, user=user)
+            return {
+                'status': True,
+                'type': 'youtube',
+                'name': form_data.url,
+                'url': form_data.url,
+                'collection_name': result.get('collection_name'),
+                'content': result.get('content'),
+            }
+
+        config = await get_retrieval_config()
+        url_result = await _fetch_url(form_data.url, config.FILE_MAX_SIZE)
+
+        if url_result['kind'] == 'web':
+            result = await process_web(request, form_data, process=process, user=user)
+            return {
+                'status': True,
+                'type': 'web',
+                'name': form_data.url,
+                'url': form_data.url,
+                'collection_name': result.get('collection_name'),
+                'content': result.get('content'),
+            }
+
+        from open_webui.routers.files import upload_file_handler
+
+        is_image = url_result['content_type'].startswith('image/')
+        file = UploadFile(
+            file=io.BytesIO(url_result['data']),
+            filename=url_result['filename'],
+            headers={'content-type': url_result['content_type']},
+        )
+        uploaded_file = await upload_file_handler(
+            request,
+            file=file,
+            metadata={'source_url': form_data.url},
+            process=process and not is_image,
+            process_in_background=False,
+            user=user,
+        )
+        file_data = uploaded_file.model_dump() if hasattr(uploaded_file, 'model_dump') else uploaded_file
+        file_id = file_data.get('id') if isinstance(file_data, dict) else None
+        if file_id:
+            refreshed_file = await Files.get_file_by_id(file_id)
+            if refreshed_file:
+                file_data = refreshed_file.model_dump()
+        return {
+            'status': True,
+            'type': 'image' if is_image else 'file',
+            'name': url_result['filename'],
+            'url': form_data.url,
+            'collection_name': (file_data.get('meta') or {}).get('collection_name'),
+            'file': file_data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(e, 'Error processing URL'),
+        )
+
+
+@router.post('/process/youtube')
+@router.post('/process/web')
+async def process_web(
+    request: Request,
+    form_data: ProcessUrlForm,
+    process: bool = Query(True, description='Whether to process and save the content'),
+    overwrite: bool = Query(True, description='Whether to overwrite existing collection'),
+    user=Depends(get_verified_user),
+):
+    config = await get_retrieval_config()
+
+    try:
+        content, docs = await get_content_from_url(request, form_data.url)
+    except HTTPException:
+        raise
+    except YoutubeTranscriptError as e:
+        log.warning('YouTube transcript unavailable for %s: %s', form_data.url, e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(e, f'Could not read content from {form_data.url}'),
+        )
+
+    try:
+        log.debug('text_content: %s', content)
+
+        if process:
+            collection_name = form_data.collection_name
+            if not collection_name:
+                collection_name = calculate_sha256_string(form_data.url)[:63]
+            else:
+                await _validate_collection_access([collection_name], user, access_type='write')
+
+            if not config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL:
+                await run_in_threadpool(
+                    save_docs_to_vector_db,
+                    request,
+                    docs,
+                    collection_name,
+                    config,
+                    overwrite=overwrite,
+                    add=(not overwrite),
+                    user=user,
+                )
+            else:
+                collection_name = None
+
+            return {
+                'status': True,
+                'collection_name': collection_name,
+                'filename': form_data.url,
+                'content': content,
+                'file': {
+                    'data': {
+                        'content': content,
+                    },
+                    'meta': {
+                        'name': form_data.url,
+                        'source': form_data.url,
+                    },
+                },
+            }
+        else:
+            return {
+                'status': True,
+                'content': content,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(e, 'Error querying knowledge base'),
+        )
+
+
+async def search_web(request: Request, engine: str, query: str, user=None) -> list[SearchResult]:
+    """Dispatch a web search query to the configured engine and return results.
+
+    Providers that have been migrated to async (aiohttp) are awaited natively.
+    Legacy sync providers are offloaded via ``asyncio.to_thread`` to avoid
+    blocking the event loop.
+    """
+
+    # TODO: add playwright to search the web
+    config = await get_retrieval_config()
+    if engine == 'ollama_cloud':
+        return await asyncio.to_thread(
+            search_ollama_cloud,
+            'https://ollama.com',
+            config.OLLAMA_CLOUD_WEB_SEARCH_API_KEY,
+            query,
+            config.WEB_SEARCH_RESULT_COUNT,
+            config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+        )
+    elif engine == 'perplexity_search':
+        if config.PERPLEXITY_API_KEY:
+            return await asyncio.to_thread(
+                search_perplexity_search,
+                config.PERPLEXITY_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                config.PERPLEXITY_SEARCH_API_URL,
+                user,
+            )
+        else:
+            raise Exception('No PERPLEXITY_API_KEY found in environment variables')
+    elif engine == 'searxng':
+        if config.SEARXNG_QUERY_URL:
+            searxng_kwargs = {'language': config.SEARXNG_LANGUAGE}
+            return await search_searxng(
+                config.SEARXNG_QUERY_URL,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                **searxng_kwargs,
+            )
+        else:
+            raise Exception('No SEARXNG_QUERY_URL found in environment variables')
+    elif engine == 'openserp':
+        if config.OPENSERP_BASE_URL:
+            return await search_openserp(
+                config.OPENSERP_BASE_URL,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No OPENSERP_BASE_URL found in environment variables')
+    elif engine == 'yacy':
+        if config.YACY_QUERY_URL:
+            return await asyncio.to_thread(
+                search_yacy,
+                config.YACY_QUERY_URL,
+                config.YACY_USERNAME,
+                config.YACY_PASSWORD,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No YACY_QUERY_URL found in environment variables')
+    elif engine == 'google_pse':
+        if config.GOOGLE_PSE_API_KEY and config.GOOGLE_PSE_ENGINE_ID:
+            return await search_google_pse(
+                config.GOOGLE_PSE_API_KEY,
+                config.GOOGLE_PSE_ENGINE_ID,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                referer=config.WEBUI_URL,
+            )
+        else:
+            raise Exception('No GOOGLE_PSE_API_KEY or GOOGLE_PSE_ENGINE_ID found in environment variables')
+    elif engine == 'brave':
+        if config.BRAVE_SEARCH_API_KEY:
+            return await search_brave(
+                config.BRAVE_SEARCH_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No BRAVE_SEARCH_API_KEY found in environment variables')
+    elif engine == 'brave_llm_context':
+        if config.BRAVE_SEARCH_API_KEY:
+            return await asyncio.to_thread(
+                search_brave_llm_context,
+                config.BRAVE_SEARCH_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                config.BRAVE_SEARCH_CONTEXT_TOKENS,
+            )
+        else:
+            raise Exception('No BRAVE_SEARCH_API_KEY found in environment variables')
+    elif engine == 'kagi':
+        if config.KAGI_SEARCH_API_KEY:
+            return await asyncio.to_thread(
+                search_kagi,
+                config.KAGI_SEARCH_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No KAGI_SEARCH_API_KEY found in environment variables')
+    elif engine == 'mojeek':
+        if config.MOJEEK_SEARCH_API_KEY:
+            return await asyncio.to_thread(
+                search_mojeek,
+                config.MOJEEK_SEARCH_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No MOJEEK_SEARCH_API_KEY found in environment variables')
+    elif engine == 'bocha':
+        if config.BOCHA_SEARCH_API_KEY:
+            return await asyncio.to_thread(
+                search_bocha,
+                config.BOCHA_SEARCH_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No BOCHA_SEARCH_API_KEY found in environment variables')
+    elif engine == 'serpstack':
+        if config.SERPSTACK_API_KEY:
+            return await search_serpstack(
+                config.SERPSTACK_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                https_enabled=config.SERPSTACK_HTTPS,
+            )
+        else:
+            raise Exception('No SERPSTACK_API_KEY found in environment variables')
+    elif engine == 'serper':
+        if config.SERPER_API_KEY:
+            return await search_serper(
+                config.SERPER_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No SERPER_API_KEY found in environment variables')
+    elif engine == 'serphouse':
+        if config.SERPHOUSE_API_KEY:
+            return await search_serphouse(
+                config.SERPHOUSE_API_KEY,
+                config.SERPHOUSE_DOMAIN,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No SERPHOUSE_API_KEY found in environment variables')
+    elif engine == 'serply':
+        if config.SERPLY_API_KEY:
+            return await asyncio.to_thread(
+                search_serply,
+                config.SERPLY_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                filter_list=config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No SERPLY_API_KEY found in environment variables')
+    elif engine == 'duckduckgo':
+        return await asyncio.to_thread(
+            search_duckduckgo,
+            query,
+            config.WEB_SEARCH_RESULT_COUNT,
+            config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            concurrent_requests=config.WEB_SEARCH_CONCURRENT_REQUESTS,
+            backend=config.DDGS_BACKEND,
+        )
+    elif engine == 'tavily':
+        if config.TAVILY_API_KEY:
+            return await asyncio.to_thread(
+                search_tavily,
+                config.TAVILY_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No TAVILY_API_KEY found in environment variables')
+    elif engine == 'exa':
+        if config.EXA_API_KEY:
+            return await asyncio.to_thread(
+                search_exa,
+                config.EXA_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No EXA_API_KEY found in environment variables')
+    elif engine == 'searchapi':
+        if config.SEARCHAPI_API_KEY:
+            return await asyncio.to_thread(
+                search_searchapi,
+                config.SEARCHAPI_API_KEY,
+                config.SEARCHAPI_ENGINE,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No SEARCHAPI_API_KEY found in environment variables')
+    elif engine == 'serpapi':
+        if config.SERPAPI_API_KEY:
+            return await asyncio.to_thread(
+                search_serpapi,
+                config.SERPAPI_API_KEY,
+                config.SERPAPI_ENGINE,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No SERPAPI_API_KEY found in environment variables')
+    elif engine == 'jina':
+        return await asyncio.to_thread(
+            search_jina,
+            config.JINA_API_KEY,
+            query,
+            config.WEB_SEARCH_RESULT_COUNT,
+            config.JINA_API_BASE_URL,
+        )
+    elif engine == 'bing':
+        return await asyncio.to_thread(
+            search_bing,
+            config.BING_SEARCH_V7_SUBSCRIPTION_KEY,
+            config.BING_SEARCH_V7_ENDPOINT,
+            str(DEFAULT_LOCALE),
+            query,
+            config.WEB_SEARCH_RESULT_COUNT,
+            config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+        )
+    elif engine == 'azure':
+        if config.AZURE_AI_SEARCH_API_KEY and config.AZURE_AI_SEARCH_ENDPOINT and config.AZURE_AI_SEARCH_INDEX_NAME:
+            return await asyncio.to_thread(
+                search_azure,
+                config.AZURE_AI_SEARCH_API_KEY,
+                config.AZURE_AI_SEARCH_ENDPOINT,
+                config.AZURE_AI_SEARCH_INDEX_NAME,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception(
+                'AZURE_AI_SEARCH_API_KEY, AZURE_AI_SEARCH_ENDPOINT, and AZURE_AI_SEARCH_INDEX_NAME are required for Azure AI Search'
+            )
+    elif engine == 'perplexity':
+        return await asyncio.to_thread(
+            search_perplexity,
+            config.PERPLEXITY_API_KEY,
+            query,
+            config.WEB_SEARCH_RESULT_COUNT,
+            config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            model=config.PERPLEXITY_MODEL,
+            search_context_usage=config.PERPLEXITY_SEARCH_CONTEXT_USAGE,
+        )
+    elif engine == 'microsoft_web_iq':
+        if config.MICROSOFT_WEB_IQ_API_KEY:
+            return await asyncio.to_thread(
+                search_microsoft_web_iq,
+                config.MICROSOFT_WEB_IQ_API_BASE_URL,
+                config.MICROSOFT_WEB_IQ_API_KEY,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                config.MICROSOFT_WEB_IQ_LANGUAGE,
+                user,
+            )
+        else:
+            raise Exception('No MICROSOFT_WEB_IQ_API_KEY found in environment variables')
+    elif engine == 'sougou':
+        if config.SOUGOU_API_SID and config.SOUGOU_API_SK:
+            return await asyncio.to_thread(
+                search_sougou,
+                config.SOUGOU_API_SID,
+                config.SOUGOU_API_SK,
+                query,
+                config.WEB_SEARCH_RESULT_COUNT,
+                config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            )
+        else:
+            raise Exception('No SOUGOU_API_SID or SOUGOU_API_SK found in environment variables')
+    elif engine == 'firecrawl':
+        return await asyncio.to_thread(
+            search_firecrawl,
+            config.FIRECRAWL_API_BASE_URL,
+            config.FIRECRAWL_API_KEY,
+            query,
+            config.WEB_SEARCH_RESULT_COUNT,
+            config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+        )
+    elif engine == 'external':
+        return await asyncio.to_thread(
+            search_external,
+            request,
+            config.EXTERNAL_WEB_SEARCH_URL,
+            config.EXTERNAL_WEB_SEARCH_API_KEY,
+            query,
+            config.WEB_SEARCH_RESULT_COUNT,
+            config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            user=user,
+        )
+    elif engine == 'yandex':
+        return await asyncio.to_thread(
+            search_yandex,
+            request,
+            config.YANDEX_WEB_SEARCH_URL,
+            config.YANDEX_WEB_SEARCH_API_KEY,
+            config.YANDEX_WEB_SEARCH_CONFIG,
+            query,
+            config.WEB_SEARCH_RESULT_COUNT,
+            config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+            user=user,
+        )
+    elif engine == 'youcom':
+        return await asyncio.to_thread(
+            search_youcom,
+            config.YOUCOM_API_KEY,
+            query,
+            config.WEB_SEARCH_RESULT_COUNT,
+            config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+        )
+    elif engine == 'linkup':
+        if config.LINKUP_API_KEY:
+            return await asyncio.to_thread(
+                search_linkup,
+                api_key=config.LINKUP_API_KEY,
+                query=query,
+                count=config.WEB_SEARCH_RESULT_COUNT,
+                filter_list=config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                params=config.LINKUP_SEARCH_PARAMS,
+            )
+        else:
+            raise Exception('No LINKUP_API_KEY found in environment variables')
+    else:
+        raise Exception('No search engine API key found in environment variables')
+
+
+@router.post('/process/web/search')
+async def process_web_search(request: Request, form_data: SearchForm, user=Depends(get_verified_user)):
+    config = await get_retrieval_config()
+    if not config.ENABLE_WEB_SEARCH:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    if user.role != 'admin' and not await has_permission(user.id, 'features.web_search', config.USER_PERMISSIONS):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    urls = []
+    result_items = []
+
+    try:
+        logging.debug('trying to web search with %s', (config.WEB_SEARCH_ENGINE, form_data.queries))
+
+        # Use semaphore to limit concurrent requests based on WEB_SEARCH_CONCURRENT_REQUESTS
+        # 0 or None = unlimited (previous behavior), positive number = limited concurrency
+        # Set to 1 for sequential execution (rate-limited APIs like Brave free tier)
+        concurrent_limit = config.WEB_SEARCH_CONCURRENT_REQUESTS
+
+        if concurrent_limit:
+            # Limited concurrency with semaphore
+            semaphore = asyncio.Semaphore(concurrent_limit)
+
+            async def search_query_with_semaphore(query):
+                async with semaphore:
+                    return await search_web(
+                        request,
+                        config.WEB_SEARCH_ENGINE,
+                        query,
+                        user,
+                    )
+
+            search_tasks = [search_query_with_semaphore(query) for query in form_data.queries]
+        else:
+            # Unlimited parallel execution
+            search_tasks = [
+                search_web(
+                    request,
+                    config.WEB_SEARCH_ENGINE,
+                    query,
+                    user,
+                )
+                for query in form_data.queries
+            ]
+
+        search_results = await asyncio.gather(*search_tasks)
+
+        for result in search_results:
+            if result:
+                for item in result:
+                    if item and item.link:
+                        result_items.append(item)
+                        urls.append(item.link)
+
+        urls = list(dict.fromkeys(urls))
+        log.debug('urls: %s', urls)
+
+    except Exception as e:
+        log.exception('Web search failed')
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(e, ERROR_MESSAGES.WEB_SEARCH_ERROR),
+        )
+
+    if len(urls) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.DEFAULT('No results found from web search'),
+        )
+
+    try:
+        if config.BYPASS_WEB_SEARCH_WEB_LOADER:
+            search_results = [item for result in search_results for item in result if result]
+
+            docs = [
+                Document(
+                    page_content=result.snippet,
+                    metadata={
+                        'source': result.link,
+                        'title': result.title,
+                        'snippet': result.snippet,
+                        'link': result.link,
+                    },
+                )
+                for result in search_results
+                if hasattr(result, 'snippet') and result.snippet is not None
+            ]
+        else:
+            loader_config = await get_loader_config()
+            loader = get_web_loader(
+                urls,
+                verify_ssl=loader_config.get('web_loader_ssl_verification'),
+                requests_per_second=loader_config.get('web_loader_concurrent_requests'),
+                trust_env=loader_config.get('web_search_trust_env'),
+                loader_config=loader_config,
+            )
+            docs = await loader.aload()
+
+        urls = [
+            doc.metadata.get('source') for doc in docs if doc.metadata.get('source')
+        ]  # only keep the urls returned by the loader
+        url_set = set(urls)
+        result_items = [
+            dict(item) for item in result_items if item.link in url_set
+        ]  # only keep the search results that have been loaded
+
+        if config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL:
+            return {
+                'status': True,
+                'collection_name': None,
+                'filenames': urls,
+                'items': result_items,
+                'docs': [
+                    {
+                        'content': doc.page_content,
+                        'metadata': doc.metadata,
+                    }
+                    for doc in docs
+                ],
+                'loaded_count': len(docs),
+            }
+        else:
+            # Create a single collection for all documents
+            # Bind the ephemeral collection to its owner so filter_accessible_collections can scope it per-user.
+            collection_name = f'web-search-{user.id}-{calculate_sha256_string("-".join(form_data.queries))}'[:63]
+
+            try:
+                await run_in_threadpool(
+                    save_docs_to_vector_db,
+                    request,
+                    docs,
+                    collection_name,
+                    config,
+                    overwrite=True,
+                    user=user,
+                )
+            except Exception as e:
+                # Surface the failure instead of returning an unusable collection
+                log.exception(f'Error saving web search results to vector DB: {e}')
+                raise HTTPException(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail='Failed to embed and store the retrieved web pages. Check the embedding configuration in Admin Settings > Documents.',
+                )
+
+            return {
+                'status': True,
+                'collection_names': [collection_name],
+                'items': result_items,
+                'filenames': urls,
+                'loaded_count': len(docs),
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception('Web search content loading failed')
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(e, ERROR_MESSAGES.WEB_SEARCH_ERROR),
+        )
+
+
+async def _validate_collection_access(collection_names: list[str], user, access_type: str = 'read') -> None:
+    """
+    Raise 403 if the user lacks access to any of the requested collections.
+    Delegates to the shared filter_accessible_collections utility so the
+    access rules stay in one place.
+    """
+    requested = set(collection_names)
+    allowed = await filter_accessible_collections(requested, user, access_type=access_type)
+    denied = requested - allowed
+    if denied:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+
+class QueryDocForm(BaseModel):
+    collection_name: str
+    query: str
+    k: int | None = None
+    k_reranker: int | None = None
+    r: float | None = None
+    hybrid: bool | None = None
+    hybrid_bm25_weight: float | None = None
+
+
+@router.post('/query/doc')
+async def query_doc_handler(
+    request: Request,
+    form_data: QueryDocForm,
+    user=Depends(get_verified_user),
+):
+    config = await get_retrieval_config()
+    await _validate_collection_access([form_data.collection_name], user)
+
+    try:
+        if config.ENABLE_RAG_HYBRID_SEARCH and (form_data.hybrid is None or form_data.hybrid):
+            return await query_doc_with_hybrid_search(
+                collection_name=form_data.collection_name,
+                collection_result=None,
+                query=form_data.query,
+                embedding_function=lambda query, prefix: request.app.state.EMBEDDING_FUNCTION(
+                    query, prefix=prefix, user=user
+                ),
+                k=form_data.k if form_data.k else config.TOP_K,
+                reranking_function=(
+                    (lambda query, documents: request.app.state.RERANKING_FUNCTION(query, documents, user=user))
+                    if request.app.state.RERANKING_FUNCTION
+                    else None
+                ),
+                k_reranker=form_data.k_reranker or config.TOP_K_RERANKER,
+                r=(form_data.r if form_data.r else config.RELEVANCE_THRESHOLD),
+                hybrid_bm25_weight=(
+                    form_data.hybrid_bm25_weight
+                    if form_data.hybrid_bm25_weight is not None
+                    else config.HYBRID_BM25_WEIGHT
+                ),
+            )
+        else:
+            query_embedding = await request.app.state.EMBEDDING_FUNCTION(
+                form_data.query, prefix=RAG_EMBEDDING_QUERY_PREFIX, user=user
+            )
+            # query_doc wraps a blocking VECTOR_DB_CLIENT.search call;
+            # offload so the request's event loop stays responsive.
+            return await asyncio.to_thread(
+                query_doc,
+                collection_name=form_data.collection_name,
+                query_embedding=query_embedding,
+                k=form_data.k if form_data.k else config.TOP_K,
+                user=user,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(e, 'Error querying knowledge base'),
+        )
+
+
+class QueryCollectionsForm(BaseModel):
+    collection_names: list[str]
+    query: str
+    k: int | None = None
+    k_reranker: int | None = None
+    r: float | None = None
+    hybrid: bool | None = None
+    hybrid_bm25_weight: float | None = None
+    enable_enriched_texts: bool | None = None
+
+
+@router.post('/query/collection')
+async def query_collection_handler(
+    request: Request,
+    form_data: QueryCollectionsForm,
+    user=Depends(get_verified_user),
+):
+    config = await get_retrieval_config()
+    await _validate_collection_access(form_data.collection_names, user)
+
+    try:
+        if config.ENABLE_RAG_HYBRID_SEARCH and (form_data.hybrid is None or form_data.hybrid):
+            return await query_collection_with_hybrid_search(
+                collection_names=form_data.collection_names,
+                queries=[form_data.query],
+                embedding_function=lambda query, prefix: request.app.state.EMBEDDING_FUNCTION(
+                    query, prefix=prefix, user=user
+                ),
+                k=form_data.k if form_data.k else config.TOP_K,
+                reranking_function=(
+                    (lambda query, documents: request.app.state.RERANKING_FUNCTION(query, documents, user=user))
+                    if request.app.state.RERANKING_FUNCTION
+                    else None
+                ),
+                k_reranker=form_data.k_reranker or config.TOP_K_RERANKER,
+                r=(form_data.r if form_data.r else config.RELEVANCE_THRESHOLD),
+                hybrid_bm25_weight=(
+                    form_data.hybrid_bm25_weight
+                    if form_data.hybrid_bm25_weight is not None
+                    else config.HYBRID_BM25_WEIGHT
+                ),
+                enable_enriched_texts=(
+                    form_data.enable_enriched_texts
+                    if form_data.enable_enriched_texts is not None
+                    else config.ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS
+                ),
+            )
+        else:
+            return await query_collection(
+                request,
+                collection_names=form_data.collection_names,
+                queries=[form_data.query],
+                embedding_function=lambda query, prefix: request.app.state.EMBEDDING_FUNCTION(
+                    query, prefix=prefix, user=user
+                ),
+                k=form_data.k if form_data.k else config.TOP_K,
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(e, 'Error querying knowledge base'),
+        )
+
+
+####################################
+#
+# Vector DB operations
+#
+####################################
+
+
+class DeleteForm(BaseModel):
+    collection_name: str
+    file_id: str
+
+
+@router.post('/delete')
+async def delete_entries_from_collection(
+    request: Request,
+    form_data: DeleteForm,
+    user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    try:
+        if await ASYNC_VECTOR_DB_CLIENT.has_collection(collection_name=form_data.collection_name):
+            file = await Files.get_file_by_id(form_data.file_id, db=db)
+            if not file:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=ERROR_MESSAGES.NOT_FOUND,
+                )
+            hash = file.hash
+
+            # Refuse to issue a `filter={'hash': None}` query — the
+            # match semantics of a null filter value are
+            # backend-dependent (some backends ignore the key, some
+            # match every row whose metadata lacks `hash`) and risk
+            # deleting unrelated entries. Files without a hash are
+            # typically unprocessed / failed / legacy records that
+            # can't be targeted by hash anyway.
+            if hash is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=ERROR_MESSAGES.DEFAULT('File has no hash; cannot delete vector entries by hash.'),
+                )
+
+            # Pre-existing bug: this used `metadata=` which is not a
+            # parameter on `VectorDBBase.delete` nor on any backend
+            # implementation, so the call always raised TypeError that
+            # was silently swallowed by the surrounding `except
+            # Exception` and the endpoint reported `{'status': False}`
+            # for every request. Use `filter` to actually do what the
+            # endpoint name promises.
+            await ASYNC_VECTOR_DB_CLIENT.delete(
+                collection_name=form_data.collection_name,
+                filter={'hash': hash},
+            )
+            await publish_event(
+                request,
+                EVENTS.RETRIEVAL_COLLECTION_DELETED,
+                actor=user,
+                subject_id=form_data.collection_name,
+                data={'file_id': form_data.file_id},
+            )
+            return {'status': True}
+        else:
+            return {'status': False}
+    except HTTPException:
+        # Caller-meaningful errors (404/400 above) must not be
+        # swallowed and re-shaped as `{'status': False}`.
+        raise
+    except Exception as e:
+        log.exception(e)
+        return {'status': False}
+
+
+@router.post('/reset/db')
+async def reset_vector_db(
+    request: Request,
+    user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    await ASYNC_VECTOR_DB_CLIENT.reset()
+    await Knowledges.delete_all_knowledge(db=db)
+    await publish_event(
+        request,
+        EVENTS.RETRIEVAL_VECTOR_DB_RESET,
+        actor=user,
+        subject_id='default',
+    )
+
+
+@router.post('/reset/uploads')
+async def reset_upload_dir(request: Request, user=Depends(get_admin_user)) -> bool:
+    folder = f'{UPLOAD_DIR}'
+    try:
+        # Check if the directory exists
+        if await asyncio.to_thread(os.path.exists, folder):
+            # Iterate over all the files and directories in the specified directory
+            for filename in await asyncio.to_thread(os.listdir, folder):
+                file_path = os.path.join(folder, filename)
+                try:
+                    if await asyncio.to_thread(os.path.isfile, file_path) or await asyncio.to_thread(
+                        os.path.islink, file_path
+                    ):
+                        await asyncio.to_thread(os.unlink, file_path)  # Remove the file or link
+                    elif await asyncio.to_thread(os.path.isdir, file_path):
+                        await asyncio.to_thread(shutil.rmtree, file_path)  # Remove the directory
+                except Exception as e:
+                    log.exception(f'Failed to delete {file_path}. Reason: {e}')
+        else:
+            log.warning(f'The directory {folder} does not exist')
+    except Exception as e:
+        log.exception(f'Failed to process the directory {folder}. Reason: {e}')
+
+    await publish_event(
+        request,
+        EVENTS.RETRIEVAL_UPLOADS_RESET,
+        actor=user,
+        subject_id='all',
+        subject_type='file.uploads',
+    )
+    return True
+
+
+if ENV == 'dev':
+
+    @router.get('/ef/{text}')
+    async def get_embeddings(request: Request, text: str | None = 'Hello World!'):
+        return {'result': await request.app.state.EMBEDDING_FUNCTION(text, prefix=RAG_EMBEDDING_QUERY_PREFIX)}
+
+
+class BatchProcessFilesForm(BaseModel):
+    files: list[FileModel]
+    collection_name: str
+
+
+class BatchProcessFilesResult(BaseModel):
+    file_id: str
+    status: str
+    error: str | None = None
+
+
+class BatchProcessFilesResponse(BaseModel):
+    results: list[BatchProcessFilesResult]
+    errors: list[BatchProcessFilesResult]
+
+
+@router.post('/process/files/batch')
+async def process_files_batch(
+    request: Request,
+    form_data: BatchProcessFilesForm,
+    user=Depends(get_verified_user),
+    db=None,
+) -> BatchProcessFilesResponse:
+    """
+    Process a batch of files and save them to the vector database.
+
+    NOTE: We intentionally do NOT use Depends(get_async_session) here.
+    The save_docs_to_vector_db() call makes external embedding API calls which
+    can take 5-60+ seconds for batch operations. Database operations after
+    embedding (Files.update_file_by_id) manage their own short-lived sessions.
+    """
+
+    config = await get_retrieval_config()
+    collection_name = form_data.collection_name
+
+    if collection_name:
+        await _validate_collection_access([collection_name], user, access_type='write')
+
+    file_results: list[BatchProcessFilesResult] = []
+    file_errors: list[BatchProcessFilesResult] = []
+    file_updates: list[FileUpdateForm] = []
+
+    # Prepare all documents first
+    all_docs: list[Document] = []
+
+    for file in form_data.files:
+        try:
+            # Ownership check: verify the requesting user owns the file or is an admin
+            db_file = await Files.get_file_by_id(file.id, db=db)
+            if not db_file:
+                file_errors.append(
+                    BatchProcessFilesResult(
+                        file_id=file.id,
+                        status='failed',
+                        error='File not found',
+                    )
+                )
+                continue
+            if db_file.user_id != user.id and user.role != 'admin':
+                file_errors.append(
+                    BatchProcessFilesResult(
+                        file_id=file.id,
+                        status='failed',
+                        error='Permission denied: not file owner',
+                    )
+                )
+                continue
+
+            text_content = file.data.get('content', '')
+            docs: list[Document] = [
+                Document(
+                    page_content=text_content.replace('<br/>', '\n'),
+                    metadata={
+                        **file.meta,
+                        'name': file.filename,
+                        'created_by': file.user_id,
+                        'file_id': file.id,
+                        'source': file.filename,
+                    },
+                )
+            ]
+
+            all_docs.extend(docs)
+
+            file_updates.append(
+                FileUpdateForm(
+                    hash=calculate_sha256_string(text_content),
+                    data={'content': text_content},
+                )
+            )
+            file_results.append(BatchProcessFilesResult(file_id=file.id, status='prepared'))
+
+        except Exception as e:
+            log.error(f'process_files_batch: Error processing file {file.id}: {str(e)}')
+            file_errors.append(BatchProcessFilesResult(file_id=file.id, status='failed', error=str(e)))
+
+    # Save all documents in one batch
+    if all_docs:
+        try:
+            await run_in_threadpool(
+                save_docs_to_vector_db,
+                request,
+                all_docs,
+                collection_name,
+                config,
+                add=True,
+                user=user,
+            )
+
+            # Update all files with collection name
+            for file_update, file_result in zip(file_updates, file_results):
+                await Files.update_file_by_id(id=file_result.file_id, form_data=file_update, db=db)
+                file_result.status = 'completed'
+
+        except Exception as e:
+            log.error(f'process_files_batch: Error saving documents to vector DB: {str(e)}')
+            for file_result in file_results:
+                file_result.status = 'failed'
+                file_errors.append(BatchProcessFilesResult(file_id=file_result.file_id, status='failed', error=str(e)))
+
+    response = BatchProcessFilesResponse(results=file_results, errors=file_errors)
+    await publish_event(
+        request,
+        EVENTS.RETRIEVAL_CONTENT_PROCESSED,
+        actor=user,
+        subject_id=collection_name,
+        subject_type='retrieval.collection',
+        data={
+            'count': len([item for item in file_results if item.status == 'completed']),
+            'errors': len(file_errors),
+        },
+    )
+    return response
