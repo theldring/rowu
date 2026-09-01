@@ -1,25 +1,29 @@
-import json
 import logging
 import time
-from typing import Optional
 import uuid
+from typing import Optional
 
-from sqlalchemy import select, delete, update, func, and_, or_, cast, String
-from sqlalchemy.ext.asyncio import AsyncSession
-from open_webui.internal.db import Base, JSONField, get_async_db_context
 from open_webui.env import DEFAULT_GROUP_SHARE_PERMISSION
-
+from open_webui.internal.db import Base, JSONField, get_async_db_context
 from open_webui.models.files import FileMetadataResponse
-
-
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Column,
-    Text,
-    JSON,
     ForeignKey,
+    Index,
+    String,
+    Text,
+    and_,
+    cast,
+    delete,
+    func,
+    or_,
+    select,
+    update,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +72,8 @@ class GroupModel(BaseModel):
 
 class GroupMember(Base):
     __tablename__ = 'group_member'
+    # The table's (group_id, user_id) unique constraint cannot serve user_id lookups.
+    __table_args__ = (Index('ix_group_member_user_id_group_id', 'user_id', 'group_id'),)
 
     id = Column(Text, unique=True, primary_key=True)
     group_id = Column(

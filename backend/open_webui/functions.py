@@ -1,11 +1,9 @@
+import asyncio
+import inspect
 import logging
 import sys
-import inspect
-import json
-import asyncio
-
-from pydantic import BaseModel
 from typing import AsyncGenerator, Generator, Iterator
+
 from fastapi import (
     Depends,
     FastAPI,
@@ -16,39 +14,35 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import BaseModel
 from starlette.responses import Response, StreamingResponse
 
-
+from open_webui.config import BYPASS_ADMIN_ACCESS_CONTROL
 from open_webui.constants import ERROR_MESSAGES
+from open_webui.env import BYPASS_MODEL_ACCESS_CONTROL, ENABLE_PLUGINS, GLOBAL_LOG_LEVEL
+from open_webui.models.functions import Functions
+from open_webui.models.models import Models
+from open_webui.models.users import UserModel
 from open_webui.socket.main import (
     get_event_call,
     get_event_emitter,
 )
-
-
-from open_webui.models.users import UserModel
-from open_webui.models.functions import Functions
-from open_webui.models.models import Models
-
-from open_webui.utils.plugin import (
-    load_function_module_by_id,
-    get_function_module_from_cache,
-)
 from open_webui.utils.access_control import check_model_access
-
-from open_webui.env import GLOBAL_LOG_LEVEL, BYPASS_MODEL_ACCESS_CONTROL
-from open_webui.config import BYPASS_ADMIN_ACCESS_CONTROL
-
+from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.misc import (
     add_or_update_system_message,
     get_last_user_message,
-    prepend_to_first_user_message_content,
     openai_chat_chunk_message_template,
     openai_chat_completion_message_template,
+    prepend_to_first_user_message_content,
 )
 from open_webui.utils.payload import (
     apply_model_params_to_body_openai,
     apply_system_prompt_to_body,
+)
+from open_webui.utils.plugin import (
+    get_function_module_from_cache,
+    load_function_module_by_id,
 )
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
@@ -75,6 +69,9 @@ async def get_function_module_by_id(request: Request, pipe_id: str):
 
 
 async def get_function_models(request):
+    if not ENABLE_PLUGINS:
+        return []
+
     pipes = await Functions.get_functions_by_type('pipe', active_only=True)
     pipe_models = []
 
@@ -103,7 +100,7 @@ async def get_function_models(request):
                     log.exception(e)
                     sub_pipes = []
 
-                log.debug(f"get_function_models: function '{pipe.id}' is a manifold of {sub_pipes}")
+                log.debug("get_function_models: function '%s' is a manifold of %s", pipe.id, sub_pipes)
 
                 for p in sub_pipes:
                     sub_pipe_id = f'{pipe.id}.{p["id"]}'
@@ -129,7 +126,10 @@ async def get_function_models(request):
                 pipe_flag = {'type': 'pipe'}
 
                 log.debug(
-                    f"get_function_models: function '{pipe.id}' is a single pipe {{ 'id': {pipe.id}, 'name': {pipe.name} }}"
+                    "get_function_models: function '%s' is a single pipe { 'id': %s, 'name': %s }",
+                    pipe.id,
+                    pipe.id,
+                    pipe.name,
                 )
 
                 pipe_models.append(
@@ -150,7 +150,10 @@ async def get_function_models(request):
     return pipe_models
 
 
-async def generate_function_chat_completion(request, form_data, user, models: dict = {}):
+async def generate_function_chat_completion(request, form_data, user, models: dict | None = None):
+    if models is None:
+        models = {}
+
     async def execute_pipe(pipe, params):
         if inspect.iscoroutinefunction(pipe):
             return await pipe(**params)
@@ -170,7 +173,7 @@ async def generate_function_chat_completion(request, form_data, user, models: di
             line = line.model_dump_json()
             line = f'data: {line}'
         if isinstance(line, dict):
-            line = f'data: {json.dumps(line)}'
+            line = f'data: {JSONCodec.dumps(line)}'
 
         try:
             line = line.decode('utf-8')
@@ -181,7 +184,7 @@ async def generate_function_chat_completion(request, form_data, user, models: di
             return f'{line}\n\n'
         else:
             line = openai_chat_chunk_message_template(form_data['model'], line)
-            return f'data: {json.dumps(line)}\n\n'
+            return f'data: {JSONCodec.dumps(line)}\n\n'
 
     def get_pipe_id(form_data: dict) -> str:
         pipe_id = form_data['model']
@@ -208,6 +211,13 @@ async def generate_function_chat_completion(request, form_data, user, models: di
                 params['__user__']['valves'] = function_module.UserValves()
 
         return params
+
+    # Set server-side by utils/chat.py, never by client input. Mirrors the routers.
+    bypass_system_prompt = getattr(request.state, 'bypass_system_prompt', False)
+
+    # Copy so the base-model substitution below doesn't leak into the caller's
+    # payload, which the tool-call continuation re-submits. Mirrors the routers.
+    form_data = {**form_data}
 
     model_id = form_data.get('model')
     model_info = await Models.get_model_by_id(model_id)
@@ -284,7 +294,8 @@ async def generate_function_chat_completion(request, form_data, user, models: di
         if params:
             system = params.pop('system', None)
             form_data = apply_model_params_to_body_openai(params, form_data)
-            form_data = await apply_system_prompt_to_body(system, form_data, metadata, user)
+            if not bypass_system_prompt:
+                form_data = await apply_system_prompt_to_body(system, form_data, metadata, user)
 
     pipe_id = get_pipe_id(form_data)
     function_module = await get_function_module_by_id(request, pipe_id)
@@ -304,17 +315,17 @@ async def generate_function_chat_completion(request, form_data, user, models: di
                         yield data
                     return
                 if isinstance(res, dict):
-                    yield f'data: {json.dumps(res)}\n\n'
+                    yield f'data: {JSONCodec.dumps(res)}\n\n'
                     return
 
             except Exception as e:
                 log.error(f'Error: {e}')
-                yield f'data: {json.dumps({"error": {"detail": str(e)}})}\n\n'
+                yield f'data: {JSONCodec.dumps({"error": {"detail": str(e)}})}\n\n'
                 return
 
             if isinstance(res, str):
                 message = openai_chat_chunk_message_template(form_data['model'], res)
-                yield f'data: {json.dumps(message)}\n\n'
+                yield f'data: {JSONCodec.dumps(message)}\n\n'
 
             if isinstance(res, Iterator):
                 for line in res:
@@ -324,11 +335,10 @@ async def generate_function_chat_completion(request, form_data, user, models: di
                 async for line in res:
                     yield process_line(form_data, line)
 
-            if isinstance(res, str) or isinstance(res, Generator):
-                finish_message = openai_chat_chunk_message_template(form_data['model'], '')
-                finish_message['choices'][0]['finish_reason'] = 'stop'
-                yield f'data: {json.dumps(finish_message)}\n\n'
-                yield 'data: [DONE]'
+            finish_message = openai_chat_chunk_message_template(form_data['model'], '')
+            finish_message['choices'][0]['finish_reason'] = 'stop'
+            yield f'data: {JSONCodec.dumps(finish_message)}\n\n'
+            yield 'data: [DONE]'
 
         return StreamingResponse(stream_content(), media_type='text/event-stream')
     else:

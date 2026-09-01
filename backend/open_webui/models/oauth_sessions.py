@@ -1,20 +1,17 @@
-import time
-import logging
-import uuid
-from typing import Optional, List
 import base64
 import hashlib
-import json
+import logging
+import time
+import uuid
+from typing import List, Optional
 
 from cryptography.fernet import Fernet
-
-from sqlalchemy import select, delete, update
-from sqlalchemy.ext.asyncio import AsyncSession
-from open_webui.internal.db import Base, get_async_db_context
 from open_webui.env import OAUTH_SESSION_TOKEN_ENCRYPTION_KEY
-
+from open_webui.internal.db import Base, get_async_db_context
+from open_webui.utils.json_codec import JSONCodec
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import BigInteger, Column, String, Text, Index
+from sqlalchemy import BigInteger, Column, Index, String, Text, delete, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 
@@ -88,7 +85,7 @@ class OAuthSessionTable:
     def _encrypt_token(self, token) -> str:
         """Encrypt OAuth tokens for storage"""
         try:
-            token_json = json.dumps(token)
+            token_json = JSONCodec.dumps(token)
             encrypted = self.fernet.encrypt(token_json.encode()).decode()
             return encrypted
         except Exception as e:
@@ -99,7 +96,7 @@ class OAuthSessionTable:
         """Decrypt OAuth tokens from storage"""
         try:
             decrypted = self.fernet.decrypt(token.encode()).decode()
-            return json.loads(decrypted)
+            return JSONCodec.loads(decrypted)
         except Exception as e:
             log.error(f'Error decrypting tokens: {type(e).__name__}: {e}')
             raise
@@ -131,7 +128,6 @@ class OAuthSessionTable:
 
                 db.add(result)
                 await db.commit()
-                await db.refresh(result)
 
                 if result:
                     # Make a copy of the model data before closing session
