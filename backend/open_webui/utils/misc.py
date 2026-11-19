@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections.abc
+import difflib
 import hashlib
 import ipaddress
 import logging
@@ -15,11 +16,14 @@ from typing import Callable, Optional, Sequence, Union
 
 import aiohttp
 import mimeparse
+from fastapi import HTTPException
 from open_webui.env import CHAT_STREAM_RESPONSE_CHUNK_MAX_BUFFER_SIZE
 from open_webui.utils.json_codec import JSONCodec
+from open_webui.utils.tool_calling import prepare_tool_call
 
 log = logging.getLogger(__name__)
 SURROGATE_RE = re.compile('[\ud800-\udfff]')
+MAX_DIFF_LINES = 5000
 
 
 def deep_update(d, u):
@@ -48,9 +52,13 @@ def get_response_error_detail(response: object) -> str:
         body = response.body
         if not isinstance(body, str):
             body = body.decode('utf-8', 'replace')
-        detail = JSONCodec.loads(body)
     except Exception:
         return fallback
+
+    try:
+        detail = JSONCodec.loads(body)
+    except JSONCodec.JSONDecodeError:
+        return body.strip() or fallback
 
     while isinstance(detail, dict):
         next_detail = None
@@ -179,6 +187,11 @@ def is_host_blocked(host: Union[str, Sequence[str]], filter_list: list[str] | No
     return any(_host_matches_pattern(h, blocked) for h in hosts for blocked in block_list)
 
 
+def is_empty_reply(message: dict) -> bool:
+    """An assistant reply with nothing in it, such as a failed one. Requests leave these out."""
+    return message.get('role') == 'assistant' and not message.get('content') and not message.get('output')
+
+
 def get_message_list(messages_map, message_id):
     """
     Reconstructs a list of messages in order up to the specified message_id.
@@ -188,7 +201,7 @@ def get_message_list(messages_map, message_id):
     :return: List of ordered messages starting from the root to the given message
     """
 
-    # Handle case where messages is None
+    # No history, no archaeology. An empty map gets an empty list.
     if not messages_map:
         return []  # Return empty list instead of None to prevent iteration errors
 
@@ -198,7 +211,7 @@ def get_message_list(messages_map, message_id):
     if not current_message:
         return []  # Return empty list instead of None to prevent iteration errors
 
-    # Reconstruct the chain by following the parentId links
+    # Follow parentId back through the conversation family tree.
     message_list = []
     visited_message_ids = set()
 
@@ -215,7 +228,7 @@ def get_message_list(messages_map, message_id):
 
 
 def get_messages_content(messages: list[dict]) -> str:
-    return '\n'.join([f'{message["role"].upper()}: {get_content_from_message(message)}' for message in messages])
+    return '\n'.join([f'{message["role"].upper()}: {get_content_from_message(message) or ""}' for message in messages])
 
 
 def get_last_user_message_item(messages: list[dict]) -> dict | None:
@@ -261,6 +274,47 @@ def get_output_text(output: list | None) -> str:
     return '\n'.join(texts)
 
 
+def get_paired_tool_call_ids(messages: list[dict]) -> list[set[str]]:
+    """Tool call ids answered within each message's assistant-plus-tool-results block."""
+    paired_ids_by_message = [set() for _ in messages]
+    for index, message in enumerate(messages):
+        if message.get('role') != 'assistant' or not message.get('tool_calls'):
+            continue
+
+        block_end = index + 1
+        while block_end < len(messages) and messages[block_end].get('role') == 'tool':
+            block_end += 1
+
+        requested_ids = {tool_call.get('id') for tool_call in message['tool_calls'] if tool_call.get('id')}
+        completed_ids = {tool_message.get('tool_call_id') for tool_message in messages[index + 1 : block_end]}
+        paired_ids = requested_ids & completed_ids
+        for block_index in range(index, block_end):
+            paired_ids_by_message[block_index] = paired_ids
+
+    return paired_ids_by_message
+
+
+def get_tool_results(messages: list[dict], name: str) -> list[str]:
+    """Everything the named tool returned in these messages, oldest first."""
+    call_ids = {
+        tool_call.get('id')
+        for message in messages
+        for tool_call in message.get('tool_calls') or []
+        if (tool_call.get('function') or {}).get('name') == name
+    }
+    return [
+        get_content_from_message(message) or ''
+        for message in messages
+        if message.get('role') == 'tool' and message.get('tool_call_id') in call_ids
+    ]
+
+
+def get_last_tool_result(messages: list[dict], name: str) -> str | None:
+    """What the named tool last returned in these messages, or None if it never did."""
+    results = get_tool_results(messages, name)
+    return results[-1] if results else None
+
+
 def reconcile_tool_pairs(messages: list[dict]) -> list[dict]:
     """Drop unpaired tool_use / tool_result from a reconstructed conversation.
 
@@ -271,22 +325,14 @@ def reconcile_tool_pairs(messages: list[dict]) -> list[dict]:
 
     Well-formed output is unaffected: every id pairs, so nothing is stripped.
     """
-    completed_tool_call_ids = {
-        message['tool_call_id'] for message in messages if message.get('role') == 'tool' and message.get('tool_call_id')
-    }
-    requested_tool_call_ids = {
-        tool_call['id']
-        for message in messages
-        for tool_call in message.get('tool_calls') or ()
-        if message.get('role') == 'assistant' and tool_call.get('id')
-    }
+    paired_ids_by_message = get_paired_tool_call_ids(messages)
 
     reconciled_messages = []
-    for message in messages:
+    for message, paired_ids in zip(messages, paired_ids_by_message):
         role = message.get('role')
 
-        # Orphan tool result — no assistant ever claimed this call_id.
-        if role == 'tool' and message.get('tool_call_id') not in requested_tool_call_ids:
+        # Orphan tool result: not claimed by the assistant heading its tool block.
+        if role == 'tool' and message.get('tool_call_id') not in paired_ids:
             continue
 
         # Non-assistant or no tool_calls — pass through unchanged.
@@ -294,10 +340,8 @@ def reconcile_tool_pairs(messages: list[dict]) -> list[dict]:
             reconciled_messages.append(message)
             continue
 
-        # Keep only tool_calls whose id received a tool-role response.
-        valid_tool_calls = [
-            tool_call for tool_call in message['tool_calls'] if tool_call.get('id') in completed_tool_call_ids
-        ]
+        # Keep only tool_calls whose id received an adjacent tool-role response.
+        valid_tool_calls = [tool_call for tool_call in message['tool_calls'] if tool_call.get('id') in paired_ids]
 
         if valid_tool_calls:
             reconciled_messages.append({**message, 'tool_calls': valid_tool_calls})
@@ -320,6 +364,96 @@ def get_reasoning_details(payload: dict):
     provider_fields = payload.get('provider_specific_fields') or {}
     provider_details = provider_fields.get('reasoning_details') if isinstance(provider_fields, dict) else None
     return payload.get('reasoning_details') or provider_details
+
+
+def get_provider_function(item: dict) -> dict:
+    """Restore the model's call when OWUI displays and executes a resolved target instead."""
+    function = item.get('provider_function')
+    if not isinstance(function, dict):
+        function = item
+    # Repair only the provider copy; failed calls and their original arguments remain intact.
+    function = dict(function)
+    if 'original_arguments' in function:
+        function['arguments'] = function['original_arguments']
+    original_arguments = function.get('arguments')
+    if error := prepare_tool_call(function):
+        function['arguments'] = JSONCodec.dumps({'error': error})
+    else:
+        try:
+            # A valid JSON object goes back as the model wrote it, so its cached output still matches.
+            if isinstance(JSONCodec.loads(original_arguments), dict):
+                function['arguments'] = original_arguments
+        except (TypeError, ValueError):
+            pass
+    return {
+        'name': function.get('name', ''),
+        'arguments': function['arguments'],
+    }
+
+
+def merge_tool_call_batches(output: list[dict]) -> list[dict]:
+    """Replay each batch under its original provider ID with one ordered, combined result."""
+    batches = {}
+    results = {}
+    for item in output:
+        if item.get('type') == 'function_call' and item.get('provider_batch'):
+            batches.setdefault(item['provider_batch']['call_id'], []).append(item)
+        elif item.get('type') == 'function_call_output':
+            results[item.get('call_id')] = item
+    if not batches:
+        return output
+
+    members = {call['call_id']: batch_id for batch_id, calls in batches.items() for call in calls}
+    replay = []
+    emitted = set()
+    remaining = {batch_id: {call['call_id'] for call in calls} for batch_id, calls in batches.items()}
+    for item in output:
+        batch_id = members.get(item.get('call_id'))
+        if batch_id is None or item.get('type') not in {'function_call', 'function_call_output'}:
+            replay.append(item)
+            continue
+        calls = batches[batch_id]
+        batch = calls[0]['provider_batch']
+        # Approval pauses can leave only part of a batch complete. Never replay an unpaired call.
+        if len(calls) != batch['size'] or any(call['call_id'] not in results for call in calls):
+            continue
+        if item['type'] == 'function_call':
+            if batch_id not in emitted:
+                replay.append(
+                    {
+                        'type': 'function_call',
+                        'id': calls[0].get('id', batch_id),
+                        'call_id': batch_id,
+                        **batch['function'],
+                        'status': 'completed',
+                    }
+                )
+                emitted.add(batch_id)
+            continue
+        remaining[batch_id].discard(item['call_id'])
+        if remaining[batch_id]:
+            continue
+        entries, images = [], []
+        for call in calls:
+            result = results[call['call_id']]
+            parts = result.get('output', [])
+            entries.append(
+                {
+                    'tool_name': call['provider_batch']['tool_name'],
+                    'status': result.get('status', call.get('status')),
+                    'output': [part for part in parts if part.get('type') != 'input_image'],
+                }
+            )
+            images.extend(part for part in parts if part.get('type') == 'input_image')
+        replay.append(
+            {
+                'type': 'function_call_output',
+                'call_id': batch_id,
+                'output': [{'type': 'input_text', 'text': JSONCodec.dumps({'results': entries})}, *images],
+                'status': 'completed',
+            }
+        )
+    return replay
 
 
 def convert_output_to_messages(
@@ -353,6 +487,7 @@ def convert_output_to_messages(
     if not output or not isinstance(output, list):
         return []
 
+    output = merge_tool_call_batches(output)
     messages = []
     pending_tool_calls = []
     pending_content = []
@@ -360,17 +495,6 @@ def convert_output_to_messages(
     pending_reasoning_details = []
     pending_tool_image_urls = []
     pending_tool_outputs = []
-    completed_call_ids = {
-        item.get('call_id')
-        for item in output
-        if item.get('type') == 'function_call'
-        and item.get('call_id')
-        and item.get('status') in {'completed', 'failed', 'rejected'}
-    }
-    result_call_ids = {
-        item.get('call_id') for item in output if item.get('type') == 'function_call_output' and item.get('call_id')
-    }
-    function_call_ids = completed_call_ids & result_call_ids
 
     def flush_pending():
         nonlocal pending_content, pending_tool_calls, pending_reasoning, pending_reasoning_details
@@ -379,7 +503,7 @@ def convert_output_to_messages(
 
         message = {
             'role': 'assistant',
-            'content': '\n'.join(pending_content) if pending_content else '',
+            'content': '\n'.join(pending_content) if pending_content else (None if pending_tool_calls else ''),
             **({'tool_calls': pending_tool_calls} if pending_tool_calls else {}),
         }
 
@@ -388,6 +512,9 @@ def convert_output_to_messages(
                 message['thinking'] = '\n'.join(pending_reasoning)
             else:
                 message['reasoning_content'] = '\n'.join(pending_reasoning)
+        elif pending_tool_calls and reasoning_format == 'reasoning_content':
+            # DeepSeek rejects a tool call turn without reasoning_content.
+            message['reasoning_content'] = ''
 
         if pending_reasoning_details:
             message['reasoning_details'] = pending_reasoning_details
@@ -422,6 +549,11 @@ def convert_output_to_messages(
         if not pending_tool_outputs:
             return
 
+        pending_tool_outputs = [
+            result
+            for result in pending_tool_outputs
+            if any(call['id'] == result.get('call_id') for call in pending_tool_calls)
+        ]
         flush_pending()
         for output_item in pending_tool_outputs:
             output_parts = output_item.get('output', [])
@@ -469,7 +601,7 @@ def convert_output_to_messages(
 
     for item in output:
         item_type = item.get('type', '')
-        if item_type not in {'function_call', 'function_call_output'}:
+        if item_type != 'function_call_output':
             flush_tool_outputs()
             flush_tool_images()
 
@@ -484,29 +616,19 @@ def convert_output_to_messages(
                 pending_content.append(text)
 
         elif item_type == 'function_call':
-            if item.get('call_id') not in function_call_ids:
+            if not item.get('call_id') or item.get('status') not in {'completed', 'failed', 'rejected'}:
                 continue
 
             # Collect tool calls to batch into assistant message
-            arguments = item.get('arguments', '{}')
-            # Ensure arguments is always a JSON string
-            if not isinstance(arguments, str):
-                arguments = JSONCodec.dumps(arguments)
             pending_tool_calls.append(
                 {
                     'id': item.get('call_id', ''),
                     'type': 'function',
-                    'function': {
-                        'name': item.get('name', ''),
-                        'arguments': arguments,
-                    },
+                    'function': get_provider_function(item),
                 }
             )
 
         elif item_type == 'function_call_output':
-            if item.get('call_id') not in function_call_ids:
-                continue
-
             pending_tool_outputs.append(item)
 
         elif item_type == 'reasoning':
@@ -765,7 +887,7 @@ def strip_empty_content_blocks(messages: list[dict]) -> list[dict]:
     return messages
 
 
-def openai_chat_message_template(model: str, message_id: str | None = None):
+def chat_completion_template(model: str, message_id: str | None = None):
     return {
         'id': message_id if message_id else f'{model}-{str(uuid.uuid4())}',
         'created': int(time.time()),
@@ -774,7 +896,7 @@ def openai_chat_message_template(model: str, message_id: str | None = None):
     }
 
 
-def openai_chat_chunk_message_template(
+def chat_completion_chunk_template(
     model: str,
     content: str | None = None,
     reasoning_content: str | None = None,
@@ -782,7 +904,7 @@ def openai_chat_chunk_message_template(
     usage: dict | None = None,
     message_id: str | None = None,
 ) -> dict:
-    template = openai_chat_message_template(model, message_id)
+    template = chat_completion_template(model, message_id)
     template['object'] = 'chat.completion.chunk'
 
     template['choices'][0]['index'] = 0
@@ -805,14 +927,14 @@ def openai_chat_chunk_message_template(
     return template
 
 
-def openai_chat_completion_message_template(
+def chat_completion_message_template(
     model: str,
     message: str | None = None,
     reasoning_content: str | None = None,
     tool_calls: list[dict] | None = None,
     usage: dict | None = None,
 ) -> dict:
-    template = openai_chat_message_template(model)
+    template = chat_completion_template(model)
     template['object'] = 'chat.completion'
     if message is not None:
         template['choices'][0]['message'] = {
@@ -830,25 +952,21 @@ def openai_chat_completion_message_template(
 
 
 def get_gravatar_url(email):
-    # Trim leading and trailing whitespace from
-    # an email address and force all characters
-    # to lower case
+    # Trim and lowercase the email; the avatar should survive a stuck Shift key.
     address = str(email).strip().lower()
 
-    # Create a SHA256 hash of the final string
+    # Hash the normalized email into its Gravatar calling card.
     hash_object = hashlib.sha256(address.encode())
     hash_hex = hash_object.hexdigest()
 
-    # Grab the actual image URL
+    # Send the hash to Gravatar; the email stays out of the URL.
     return f'https://www.gravatar.com/avatar/{hash_hex}?d=mp'
 
 
-# Give us each day the data we require, and forgive us our
-# technical debts as we forgive those who commit upstream.
-# Lead the bits not into corruption but deliver them from
-# entropy, for the checksum and the glory are forever.
+# Let what has been entrusted to us be kept whole,
+# and let nothing be lost in the passing from hand to hand.
 def calculate_sha256(file_path, chunk_size):
-    # Compute SHA-256 hash of a file efficiently in chunks
+    # Read in chunks so large files do not need to fit in memory.
     sha256 = hashlib.sha256()
     with open(file_path, 'rb') as f:
         while chunk := f.read(chunk_size):
@@ -859,9 +977,9 @@ def calculate_sha256(file_path, chunk_size):
 def calculate_sha256_string(string):
     # Create a new SHA-256 hash object
     sha256_hash = hashlib.sha256()
-    # Update the hash object with the bytes of the input string
+    # Feed the hash UTF-8 bytes; it does not take strings on faith.
     sha256_hash.update(string.encode('utf-8'))
-    # Get the hexadecimal representation of the hash
+    # Return the hex fingerprint, now suitable for polite string comparison.
     hashed_string = sha256_hash.hexdigest()
     return hashed_string
 
@@ -874,13 +992,13 @@ def validate_email_format(email: str) -> bool:
 
 
 def sanitize_filename(file_name):
-    # Convert to lowercase
+    # Lowercase the filename; shouting does not help us find it.
     lower_case_file_name = file_name.lower()
 
-    # Remove special characters using regular expression
+    # Strip punctuation; word characters and whitespace make the guest list.
     sanitized_file_name = re.sub(r'[^\w\s]', '', lower_case_file_name)
 
-    # Replace spaces with dashes
+    # Give each whitespace run one dash, regardless of its enthusiasm.
     final_file_name = re.sub(r'\s+', '-', sanitized_file_name)
 
     return final_file_name
@@ -921,26 +1039,38 @@ def _strip_null_bytes_deep(obj):
     return obj
 
 
+def _has_null_bytes_or_surrogates(obj) -> bool:
+    """True if any string, key or value, has a null byte or surrogate."""
+    if isinstance(obj, str):
+        if '\x00' in obj:
+            return True
+        # O(1) in CPython, so ASCII strings such as base64 images skip the surrogate scan.
+        if obj.isascii():
+            return False
+        try:
+            obj.encode('utf-8')
+            return False
+        except UnicodeEncodeError:
+            return True
+    elif isinstance(obj, dict):
+        return any(_has_null_bytes_or_surrogates(k) or _has_null_bytes_or_surrogates(v) for k, v in obj.items())
+    elif isinstance(obj, list):
+        return any(_has_null_bytes_or_surrogates(v) for v in obj)
+    return False
+
+
 def sanitize_data_for_db(obj):
     """Recursively sanitize all strings in a data structure for database storage.
 
-    Performs a fast pre-check: serializes the structure once and scans for
+    Performs a fast pre-check: scans every string once for
     null bytes or invalid UTF-8 surrogates. If none are found, the
     original object is returned immediately, skipping the expensive
     recursive walk.
     """
     if isinstance(obj, str):
         return sanitize_text_for_db(obj)
-    # Fast path: check for null bytes and surrogate code points in the serialized form.
-    # json.dumps is implemented in C and much faster than a Python-level
-    # recursive walk over every leaf string.
-    try:
-        serialized = JSONCodec.dumps(obj, ensure_ascii=False)
-        if '\\u0000' not in serialized:
-            serialized.encode('utf-8')
-            return obj
-    except (TypeError, ValueError, UnicodeEncodeError):
-        pass
+    if not _has_null_bytes_or_surrogates(obj):
+        return obj
     return _strip_null_bytes_deep(obj)
 
 
@@ -999,7 +1129,7 @@ def extract_folders_after_data_docs(path):
     except ValueError:
         return []
 
-    # Exclude the filename and accumulate folder names
+    # Collect the folder ancestry; the filename is not invited.
     tags = []
 
     folders = parts[index_docs:-1]
@@ -1223,23 +1353,27 @@ def strict_match_mime_type(supported: list[str] | str, header: str) -> str | Non
         return None
 
 
+def is_raster_image_content_type(content_type: str | None) -> bool:
+    """Return True if the content type is an image that decodes as a bitmap; SVG is XML."""
+    base_content_type = (content_type or '').split(';')[0].strip().lower()
+    return base_content_type.startswith('image/') and base_content_type != 'image/svg+xml'
+
+
 def extract_urls(text: str) -> list[str]:
     # Regex pattern to match URLs
     url_pattern = re.compile(r'(https?://[^\s]+)', re.IGNORECASE)  # Matches http and https URLs
     return url_pattern.findall(text)
 
 
-# We believe in one architect of all that is seen and served.
-# Should this stream falter, it shall be raised again on the
-# third retry. We look for the uptime of the world to come.
+# Let what falters have another chance,
+# and let the third try be kinder than the first two.
 async def cleanup_response(
     response: aiohttp.ClientResponse | None,
     session: aiohttp.ClientSession | None,
 ):
     if response:
         if not response.closed:
-            # aiohttp 3.9+ made ClientResponse.close() synchronous (returns None).
-            # Older versions returned a coroutine.  Handle both gracefully.
+            # Close directly, and await completion if the implementation returns an awaitable.
             result = response.close()
             if result is not None:
                 await result
@@ -1310,3 +1444,11 @@ def stream_chunks_handler(stream: aiohttp.StreamReader):
             yield bytes(buffer)
 
     return yield_safe_stream_chunks()
+
+
+def unified_text_diff(old: str, new: str, fromfile: str, tofile: str) -> list[str]:
+    # splitlines handles a missing final newline and CRLF without breaking the renderer.
+    old_lines, new_lines = old.splitlines(), new.splitlines()
+    if max(len(old_lines), len(new_lines)) > MAX_DIFF_LINES:
+        raise HTTPException(status_code=413, detail=f'Diff is limited to {MAX_DIFF_LINES} lines per version')
+    return list(difflib.unified_diff(old_lines, new_lines, fromfile=fromfile, tofile=tofile, lineterm=''))

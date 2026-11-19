@@ -119,27 +119,30 @@
 	{#if loaded}
 		{#if draggedOver}
 			<div
-				class="absolute inset-0 z-50 rounded-md bg-gray-100/50 pointer-events-none touch-none dark:bg-gray-700/20"
+				class="pointer-events-none absolute inset-0 z-50 touch-none bg-black/[0.02] ring-1 ring-inset ring-black/10 dark:bg-white/[0.02] dark:ring-white/10"
 			></div>
 		{/if}
 
 		{#if collapsible}
 			<Collapsible bind:open className="w-full" buttonClassName="w-full" onChange={setOpen}>
 				<div class="flex items-center justify-between h-6 w-full pl-3.5 pr-1.5 shrink-0">
-					<button
-						type="button"
-						class="group flex flex-1 h-full items-center gap-1 text-left text-xs text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-gray-400 transition-colors duration-100 {buttonClassName}"
-						aria-expanded={open}
-						aria-controls="{id}-content"
-					>
-						<span>{name}</span>
-						<span
-							class="flex opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all duration-100"
-							style="transform: rotate({open ? '90deg' : '0deg'})"
+					<h2 class="flex flex-1 h-full">
+						<button
+							type="button"
+							class="group flex flex-1 h-full items-center gap-1 text-left text-xs text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-gray-400 transition-colors duration-100 {buttonClassName}"
+							id="{id}-button"
+							aria-expanded={open}
+							aria-controls="{id}-content"
 						>
-							<ChevronRight className="size-[0.6875rem]" />
-						</span>
-					</button>
+							<span>{name}</span>
+							<span
+								class="flex opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all duration-100"
+								style="transform: rotate({open ? '90deg' : '0deg'})"
+							>
+								<ChevronRight className="size-[0.6875rem]" />
+							</span>
+						</button>
+					</h2>
 
 					<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
 					<div class="contents" on:click={(e) => e.stopPropagation()}>

@@ -1,8 +1,11 @@
 import { get, readonly, writable } from 'svelte/store';
 import { getChatList, getPinnedChatList } from '$lib/apis/chats';
+import { markFolderChatsDirty, updateFolderChatLists } from './folderStates';
+import { renameChatTabs } from './chatViewStates';
 
 type ChatListItem = {
 	id: string;
+	pending_approval?: boolean;
 	[key: string]: unknown;
 };
 
@@ -15,7 +18,7 @@ export const pinnedChats = readonly(pinnedChatsStore);
 let currentPage = 1;
 let paginationReady = false;
 let requestGeneration = 0;
-let allLoaded = false;
+export let allLoaded = false;
 let loadingNextPage = false;
 
 type RefreshChatListOptions = {
@@ -47,9 +50,9 @@ export const refreshChatList = async (
 		return { accepted: false, allLoaded };
 	}
 
-	chatsStore.set(nextChats);
 	currentPage = 1;
 	allLoaded = nextChats.length === 0;
+	chatsStore.set(nextChats);
 
 	if (options.clearPinned) {
 		pinnedChatsStore.set([]);
@@ -61,7 +64,7 @@ export const refreshChatList = async (
 	return { accepted: true, allLoaded };
 };
 
-// The sidebar owns folder state. This bridge lets other components refresh it.
+// Retained data is updated even when no folder component is mounted.
 type FolderRefreshHandler = (folderId?: string | null, chat?: ChatListItem | null) => unknown;
 const folderRefreshHandlers = new Set<FolderRefreshHandler>();
 
@@ -76,7 +79,25 @@ export const refreshFolderChatLists = async (
 	folderId?: string | null,
 	chat?: ChatListItem | null
 ) => {
+	if (folderId !== null) {
+		if (folderId && chat) updateFolderChatLists(chat, folderId);
+		else markFolderChatsDirty(folderId);
+	}
 	await Promise.all([...folderRefreshHandlers].map((handler) => handler(folderId, chat)));
+};
+
+// Folder lists and open tabs keep their own copy of a chat's title.
+export const setChatTitle = (id: string, title: string) => {
+	updateFolderChatLists({ id, title });
+	renameChatTabs(id, title);
+};
+
+export const refreshSidebar = async (token: string = '') => {
+	await Promise.all([
+		refreshChatList(token, { refreshPinned: true }),
+		refreshFolderChatLists(null),
+		refreshFolderChatLists()
+	]);
 };
 
 export const loadNextChatListPage = async (token: string = ''): Promise<ChatListResult> => {
@@ -108,14 +129,18 @@ export const loadNextChatListPage = async (token: string = ''): Promise<ChatList
 	}
 };
 
-export const setChatActive = (chatId: string, active: boolean): boolean => {
+export const setChatActive = (
+	chatId: string,
+	active: boolean,
+	pendingApproval = false
+): boolean => {
 	let found = false;
 	const updateChat = (chat: ChatListItem) => {
 		if (chat.id !== chatId) {
 			return chat;
 		}
 		found = true;
-		return { ...chat, active };
+		return { ...chat, active, pending_approval: pendingApproval };
 	};
 
 	chatsStore.update((items) => (items ? items.map(updateChat) : items));

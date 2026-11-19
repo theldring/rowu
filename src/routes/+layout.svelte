@@ -1,4 +1,11 @@
 <script>
+	import { setTheme } from '$lib/utils/theme';
+	import {
+		playNotificationSound,
+		setNotificationSoundEnabled,
+		unlockNotificationAudio
+	} from '$lib/utils/audio';
+	import CommentsHost from '$lib/components/comments/CommentsHost.svelte';
 	import { io } from 'socket.io-client';
 	import { spring } from 'svelte/motion';
 	import { createPyodideWorker } from '$lib/pyodide/createPyodideWorker';
@@ -12,6 +19,7 @@
 	import {
 		config,
 		user,
+		models,
 		settings,
 		theme,
 		WEBUI_NAME,
@@ -22,22 +30,19 @@
 		socketConnected,
 		chatId,
 		tags,
-		temporaryChatEnabled,
+		temporaryChat,
+		openEmbeddedChatIds,
 		isLastActiveTab,
 		isApp,
 		appInfo,
-		toolServers,
-		playingNotificationSound,
 		channels,
 		channelId,
-		terminalServers,
-		showControls,
-		showFileNavPath,
-		showFileNavDir,
+		channelRequestQueues,
 		pyodideWorker,
 		desktopEvent
 	} from '$lib/stores';
-	import { refreshChatList } from '$lib/stores/chatList';
+	import { refreshChatList, setChatTitle } from '$lib/stores/chatList';
+	import { clearFolderStates } from '$lib/stores/folderStates';
 	import { getFileContentById } from '$lib/apis/files';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -50,10 +55,9 @@
 	import '../app.css';
 	import 'tippy.js/dist/tippy.css';
 
-	import { executeToolServer, getBackendConfig, getModels, getVersion } from '$lib/apis';
+	import { getBackendConfig, getModels, getVersion } from '$lib/apis';
 	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
 	import { getAllTags } from '$lib/apis/chats';
-	import { chatCompletion } from '$lib/apis/openai';
 	import { isTemporaryChatId } from '$lib/utils/chatId';
 	import {
 		addOpenAIConnection,
@@ -62,24 +66,19 @@
 		removeTerminalConnection
 	} from '$lib/utils/connections';
 
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
-	import {
-		bestMatchingLanguage,
-		cleanText,
-		displayFileHandler,
-		getUserTimezone,
-		removeAllDetails
-	} from '$lib/utils';
+	import { COMMUNITY_ORIGINS, WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+	import { bestMatchingLanguage, cleanText, getUserTimezone, removeAllDetails } from '$lib/utils';
 	import { setTextScale } from '$lib/utils/text-scale';
+	import { initializeTether, renewTetherSession } from '$lib/utils/tether';
 
 	import NotificationToast from '$lib/components/NotificationToast.svelte';
-	import AppSidebar from '$lib/components/app/AppSidebar.svelte';
 	import SyncStatsModal from '$lib/components/chat/Settings/SyncStatsModal.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import MfaManagement from '$lib/components/auth/MfaManagement.svelte';
 	import { getOutputText } from '$lib/components/chat/Messages/structuredOutput';
 	import { getUserSettings } from '$lib/apis/users';
-	import dayjs from 'dayjs';
-	import { getChannels } from '$lib/apis/channels';
+	import { getChannelById, getChannels } from '$lib/apis/channels';
+	import { shouldNotifyChannelMessage } from '$lib/utils/channelNotifications';
 
 	const unregisterServiceWorkers = async () => {
 		if ('serviceWorker' in navigator) {
@@ -97,17 +96,27 @@
 
 	// handle frontend updates (https://svelte.dev/docs/kit/configuration#version)
 	beforeNavigate(async ({ willUnload, to }) => {
-		if (updated.current && !willUnload && to?.url) {
+		if (updated.current && !mfaManagement && !willUnload && to?.url) {
 			await unregisterServiceWorkers();
 			location.href = to.url.href;
 		}
 	});
 
 	setContext('i18n', i18n);
+	/** @type {import('$lib/components/auth/MfaManagement.svelte').MfaManagementFlow | null} */
+	let mfaManagement = null;
+	setContext(
+		'showMfaManagement',
+		/** @param {import('$lib/components/auth/MfaManagement.svelte').MfaManagementFlow} flow */
+		(flow) => {
+			mfaManagement = flow;
+		}
+	);
 
 	const bc = new BroadcastChannel('active-tab-channel');
 
 	let loaded = false;
+	let stopTether = () => {};
 	let tokenTimer = null;
 	let isAuthRedirectInProgress = false;
 
@@ -170,7 +179,7 @@
 			randomizationFactor: 0.5,
 			path: '/ws/socket.io',
 			transports: enableWebsocket ? ['websocket'] : ['polling', 'websocket'],
-			auth: { token: localStorage.token }
+			auth: (cb) => cb({ token: localStorage.token })
 		});
 		await socket.set(_socket);
 
@@ -204,8 +213,9 @@
 
 			if (version !== null || deploymentId !== null) {
 				if (
-					($WEBUI_VERSION !== null && version !== $WEBUI_VERSION) ||
-					($WEBUI_DEPLOYMENT_ID !== null && deploymentId !== $WEBUI_DEPLOYMENT_ID)
+					!mfaManagement &&
+					(($WEBUI_VERSION !== null && version !== $WEBUI_VERSION) ||
+						($WEBUI_DEPLOYMENT_ID !== null && deploymentId !== $WEBUI_DEPLOYMENT_ID))
 				) {
 					await unregisterServiceWorkers();
 					location.href = location.href;
@@ -310,7 +320,11 @@
 			/\bimport\s+seaborn\b|\bfrom\s+seaborn\b/.test(code) ? 'seaborn' : null,
 			/\bimport\s+sympy\b|\bfrom\s+sympy\b/.test(code) ? 'sympy' : null,
 			/\bimport\s+tiktoken\b|\bfrom\s+tiktoken\b/.test(code) ? 'tiktoken' : null,
-			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null
+			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null,
+			/\bimport\s+openpyxl\b|\bfrom\s+openpyxl\b/.test(code) ? 'openpyxl' : null,
+			/\.(read|to)_excel\(|\.Excel(Writer|File)\(/.test(code) ? 'openpyxl' : null,
+			/\bimport\s+pptx\b|\bfrom\s+pptx\b/.test(code) ? 'python-pptx' : null,
+			/\bimport\s+docx\b|\bfrom\s+docx\b/.test(code) ? 'python-docx' : null
 		].filter(Boolean);
 
 		const worker = getOrCreateWorker();
@@ -431,143 +445,40 @@
 		worker.addEventListener('error', onError);
 	};
 
-	const resolveToolServer = (serverUrl) => {
-		let toolServer = $settings?.toolServers?.find((server) => server.url === serverUrl);
-		if (!toolServer) {
-			const terminalServer = ($settings?.terminalServers ?? []).find(
-				(server) => server.url === serverUrl
-			);
-			if (terminalServer) {
-				toolServer = {
-					url: terminalServer.url,
-					auth_type: terminalServer.auth_type ?? 'bearer',
-					key: terminalServer.key ?? '',
-					path: terminalServer.path ?? '/openapi.json'
-				};
+	const notify = (title, options, path) => {
+		const userId = $user?.id;
+		if (window.tether) return;
+		if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+		if (!userId) return;
+		const notification = new Notification(title, options);
+		notification.onclick = async () => {
+			notification.close();
+			if ($user?.id !== userId) return;
+			try {
+				window.focus();
+				if ($user?.id === userId) await goto(path);
+			} catch (error) {
+				console.error('Could not open notification', error);
 			}
-		}
-
-		let toolServerData =
-			$toolServers?.find((server) => server.url === serverUrl) ??
-			$terminalServers?.find((server) => server.url === serverUrl);
-
-		let token = null;
-		if (toolServer) {
-			const auth_type = toolServer?.auth_type ?? 'bearer';
-			if (auth_type === 'bearer') token = toolServer?.key;
-			else if (auth_type === 'session') token = localStorage.token;
-		}
-
-		return { toolServer, toolServerData, token };
-	};
-
-	const isDirectTerminalServer = (serverUrl) =>
-		!!serverUrl &&
-		(($settings?.terminalServers ?? []).some((server) => server.url === serverUrl) ||
-			($terminalServers ?? []).some((server) => !server.id && server.url === serverUrl));
-
-	const terminalFileResult = (result, params, serverUrl, chatId) => {
-		const path = result?.path ?? params?.path;
-		const name =
-			result?.name ??
-			String(path ?? '')
-				.split('/')
-				.filter(Boolean)
-				.at(-1) ??
-			'file';
-		const contentType = result?.content_type ?? result?.mime_type ?? 'application/octet-stream';
-
-		return {
-			...(result ?? {}),
-			type: 'file',
-			source: 'open_terminal',
-			displayed: true,
-			terminal_selector: serverUrl,
-			terminal_url: serverUrl,
-			session_id: chatId,
-			path,
-			full_path: result?.full_path ?? path,
-			name,
-			mime_type: contentType,
-			content_type: contentType,
-			page: result?.page ?? params?.page
 		};
 	};
 
-	const executeTool = async (data, cb, chatId) => {
-		const { toolServer, toolServerData, token } = resolveToolServer(data.server?.url);
-		const defaultInline =
-			data?.name === 'display_file' &&
-			data?.params?.path &&
-			data?.params?.inline === undefined &&
-			$settings?.terminalFileDisplay === 'inline' &&
-			isDirectTerminalServer(data.server?.url);
-		const params = defaultInline ? { ...data.params, inline: true } : data?.params;
-		const serverParams = data?.name === 'display_file' && params ? { ...params } : params;
-		if (serverParams && data?.name === 'display_file') {
-			delete serverParams.page;
-		}
-
-		console.log('executeTool', data, toolServer);
-
-		if (toolServer) {
-			const res = await executeToolServer(
-				token,
-				toolServer.url,
-				data?.name,
-				serverParams,
-				toolServerData,
-				chatId
-			);
-
-			console.log('executeToolServer', res);
-			const result = Array.isArray(res) ? res[0] : res;
-			const inlineDisplayFile =
-				data?.name === 'display_file' && params?.path && params?.inline === true;
-			const output =
-				inlineDisplayFile && result?.exists !== false
-					? Array.isArray(res)
-						? [terminalFileResult(result, params, toolServer.url, chatId)]
-						: terminalFileResult(result, params, toolServer.url, chatId)
-					: res;
-
-			if (data?.name === 'display_file' && params?.path && !inlineDisplayFile) {
-				if (result?.exists !== false) {
-					displayFileHandler(
-						params.path,
-						{ showControls, showFileNavPath },
-						{ page: params?.page }
-					);
-				}
-			}
-
-			if (['write_file'].includes(data?.name) && params?.path) {
-				showFileNavDir.set(result?.path ?? params.path);
-			}
-
-			if (cb) {
-				cb(structuredClone(output));
-			}
-		} else {
-			if (cb) {
-				cb({ error: 'Tool Server Not Found' });
-			}
-		}
-	};
-
 	const chatEventHandler = async (event, cb) => {
+		if (event.shared) return;
 		const chat = $page.url.pathname.includes(`/c/${event.chat_id}`);
 
 		// Skip events from temporary chats that are not the current chat.
 		// This prevents notifications from being sent to other tabs/devices
 		// for privacy, since temporary chats are not meant to be persisted or visible elsewhere.
 		const isTemporaryChat = isTemporaryChatId(event.chat_id);
-		if (isTemporaryChat && event.chat_id !== $chatId) {
+		if (isTemporaryChat && event.chat_id !== $chatId && !$openEmbeddedChatIds.has(event.chat_id)) {
 			return;
 		}
 
 		let isInBackground = document.visibilityState !== 'visible';
-		if (window.electronAPI) {
+		if (window.tether?.isFocused) {
+			isInBackground = !(await window.tether.isFocused().catch(() => false));
+		} else if (window.electronAPI) {
 			const res = await window.electronAPI.send({
 				type: 'window:isFocused'
 			});
@@ -603,19 +514,23 @@
 
 			if ($isLastActiveTab) {
 				if ($settings?.notificationEnabled ?? false) {
-					new Notification(`${data.title} / Open WebUI`, {
-						body: timeStr,
-						// LICENSE covers this Open WebUI notification identifier.
-						// Do not alter, remove, obscure, or replace it except as LICENSE permits:
-						// https://docs.openwebui.com/license.
-						icon: `${WEBUI_BASE_URL}/static/favicon.png`
-					});
+					notify(
+						`${data.title} / Open WebUI`,
+						{
+							body: timeStr,
+							// LICENSE covers this Open WebUI notification identifier.
+							// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+							// https://docs.openwebui.com/license.
+							icon: `${WEBUI_BASE_URL}/static/favicon.png`
+						},
+						'/calendar'
+					);
 				}
 			}
 			return;
 		}
 
-		// Session-targeted RPC calls (code execution, tool calls, direct completion)
+		// Session-targeted RPC calls (code execution)
 		// must ALWAYS be processed regardless of active chat or tab visibility,
 		// because the backend's sio.call blocks waiting for our callback response.
 		if (data?.session_id === $socket.id) {
@@ -623,103 +538,13 @@
 				console.log('execute:python', data);
 				executePythonAsWorker(data.id, data.code, cb, data.files || []);
 				return;
-			} else if (type === 'execute:tool') {
-				console.log('execute:tool', data);
-				executeTool(data, cb, event.chat_id);
-				return;
-			} else if (type === 'request:chat:completion') {
-				console.log(data, $socket.id);
-				const { session_id, channel, form_data, model } = data;
-
-				try {
-					const directConnections = $settings?.directConnections ?? {};
-
-					if (directConnections) {
-						const urlIdx = model?.urlIdx;
-
-						const OPENAI_API_URL = directConnections.OPENAI_API_BASE_URLS[urlIdx];
-						const OPENAI_API_KEY = directConnections.OPENAI_API_KEYS[urlIdx];
-						const API_CONFIG = directConnections.OPENAI_API_CONFIGS[urlIdx];
-
-						try {
-							if (API_CONFIG?.prefix_id) {
-								const prefixId = API_CONFIG.prefix_id;
-								form_data['model'] = form_data['model'].replace(`${prefixId}.`, ``);
-							}
-
-							const [res, controller] = await chatCompletion(
-								OPENAI_API_KEY,
-								form_data,
-								OPENAI_API_URL
-							);
-
-							if (res) {
-								// raise if the response is not ok
-								if (!res.ok) {
-									throw await res.json();
-								}
-
-								if (form_data?.stream ?? false) {
-									cb({
-										status: true
-									});
-									console.log({ status: true });
-
-									// res will either be SSE or JSON
-									const reader = res.body.getReader();
-									const decoder = new TextDecoder();
-
-									const processStream = async () => {
-										while (true) {
-											// Read data chunks from the response stream
-											const { done, value } = await reader.read();
-											if (done) {
-												break;
-											}
-
-											// Decode the received chunk
-											const chunk = decoder.decode(value, { stream: true });
-
-											// Process lines within the chunk
-											const lines = chunk.split('\n').filter((line) => line.trim() !== '');
-
-											for (const line of lines) {
-												console.log(line);
-												$socket?.emit(channel, line);
-											}
-										}
-									};
-
-									// Process the stream in the background
-									await processStream();
-								} else {
-									const data = await res.json();
-									cb(data);
-								}
-							} else {
-								throw new Error('An error occurred while fetching the completion');
-							}
-						} catch (error) {
-							console.error('chatCompletion', error);
-							cb(error);
-						}
-					}
-				} catch (error) {
-					console.error('chatCompletion', error);
-					cb(error);
-				} finally {
-					$socket.emit(channel, {
-						done: true
-					});
-				}
-				return;
 			}
 		}
 
-		if (
-			!event?.internal &&
-			((event.chat_id !== $chatId && !$temporaryChatEnabled) || isInBackground)
-		) {
+		const isVisible = !!document
+			.querySelector(`[data-chat-id="${CSS.escape(event.chat_id)}"]`)
+			?.checkVisibility();
+		if (!event?.internal && ((!isVisible && !$temporaryChat) || isInBackground)) {
 			if (type === 'chat:completion') {
 				const { done, content, output, title } = data;
 				const displayTitle = title || $i18n.t('New Chat');
@@ -728,26 +553,25 @@
 				if (done) {
 					if (
 						($settings?.notificationSound ?? true) &&
-						($settings?.notificationSoundAlways ?? false)
+						($settings?.notificationSoundAlways ?? false) &&
+						$isLastActiveTab
 					) {
-						playingNotificationSound.set(true);
-
-						const audio = new Audio(`/audio/notification.mp3`);
-						audio.play().finally(() => {
-							// Ensure the global state is reset after the sound finishes
-							playingNotificationSound.set(false);
-						});
+						void playNotificationSound($settings?.notificationSoundType);
 					}
 
 					if ($isLastActiveTab) {
 						if ($settings?.notificationEnabled ?? false) {
-							new Notification(`${displayTitle} / Open WebUI`, {
-								body: contentPreview,
-								// LICENSE covers this Open WebUI notification identifier.
-								// Do not alter, remove, obscure, or replace it except as LICENSE permits:
-								// https://docs.openwebui.com/license.
-								icon: `${WEBUI_BASE_URL}/static/favicon.png`
-							});
+							notify(
+								`${displayTitle} / Open WebUI`,
+								{
+									body: contentPreview,
+									// LICENSE covers this Open WebUI notification identifier.
+									// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+									// https://docs.openwebui.com/license.
+									icon: `${WEBUI_BASE_URL}/static/favicon.png`
+								},
+								`/c/${event.chat_id}`
+							);
 						}
 					}
 
@@ -757,13 +581,15 @@
 								goto(`/c/${event.chat_id}`);
 							},
 							content: contentPreview,
-							title: displayTitle
+							title: displayTitle,
+							playSound: !($settings?.notificationSoundAlways ?? false)
 						},
 						duration: 15000,
 						unstyled: true
 					});
 				}
 			} else if (type === 'chat:title') {
+				setChatTitle(event.chat_id, data);
 				await refreshChatList(localStorage.token);
 			} else if (type === 'chat:tags') {
 				tags.set(await getAllTags(localStorage.token));
@@ -773,6 +599,16 @@
 
 	const channelEventHandler = async (event) => {
 		console.log('channelEventHandler', event);
+		if (event.data?.type === 'channel:mute') {
+			channels.update((items) =>
+				items.map((item) =>
+					item.id === event.channel_id
+						? { ...item, is_channel_muted: event.data.data.is_channel_muted }
+						: item
+				)
+			);
+			return;
+		}
 		if (event.data?.type === 'typing') {
 			return;
 		}
@@ -799,7 +635,9 @@
 		const channel = $page.url.pathname.includes(`/channels/${event.channel_id}`);
 
 		let isInBackground = document.visibilityState !== 'visible';
-		if (window.electronAPI) {
+		if (window.tether?.isFocused) {
+			isInBackground = !(await window.tether.isFocused().catch(() => false));
+		} else if (window.electronAPI) {
 			const res = await window.electronAPI.send({
 				type: 'window:isFocused'
 			});
@@ -847,26 +685,49 @@
 			}
 
 			if (type === 'message') {
+				const preference =
+					$channels?.find((item) => item.id === event.channel_id) ??
+					(await getChannelById(localStorage.token, event.channel_id).catch(() => null));
+				if (
+					!preference ||
+					!shouldNotifyChannelMessage(
+						preference.is_channel_muted ?? false,
+						data?.content ?? '',
+						$user?.id ?? ''
+					)
+				) {
+					return;
+				}
 				const title = `${data?.user?.name}${event?.channel?.type !== 'dm' ? ` (#${event?.channel?.name})` : ''}`;
+				const content = data?.content?.replace(
+					/<([@#])([^|>\s]+)(?:\|([^>]*))?>/g,
+					(_, trigger, id, label) => trigger + (label || id)
+				);
 
 				if ($isLastActiveTab) {
 					if ($settings?.notificationEnabled ?? false) {
 						// LICENSE covers this Open WebUI notification identifier.
 						// Do not alter, remove, obscure, or replace it except as LICENSE permits:
 						// https://docs.openwebui.com/license.
-						new Notification(`${title} / Open WebUI`, {
-							body: data?.content,
-							icon: `${WEBUI_API_BASE_URL}/users/${data?.user?.id}/profile/image`
-						});
+						notify(
+							`${title} / Open WebUI`,
+							{
+								body: content,
+								icon: `${WEBUI_API_BASE_URL}/users/${data?.user?.id}/profile/image`
+							},
+							`/channels/${event.channel_id}${data?.parent_id ? `?thread=${data.parent_id}` : ''}`
+						);
 					}
 				}
 
 				toast.custom(NotificationToast, {
 					componentProps: {
 						onClick: () => {
-							goto(`/channels/${event.channel_id}`);
+							goto(
+								`/channels/${event.channel_id}${data?.parent_id ? `?thread=${data.parent_id}` : ''}`
+							);
 						},
-						content: data?.content,
+						content,
 						title: `${title}`
 					},
 					duration: 15000,
@@ -910,7 +771,7 @@
 		}
 	};
 
-	const clearExpiredSession = () => {
+	const clearExpiredSession = async () => {
 		if (isAuthRedirectInProgress) {
 			return;
 		}
@@ -920,13 +781,14 @@
 			clearInterval(tokenTimer);
 			tokenTimer = null;
 		}
+		// Await sign-out so it cannot clear the state of the new OAuth login
+		await userSignOut().catch((error) => {
+			console.error('Error signing out expired session:', error);
+		});
 		user.set(null);
 		localStorage.removeItem('token');
 		// Clear the OAuth token cookie so /auth doesn't auto-login and redirect-loop
 		document.cookie = 'token=; Max-Age=0; path=/';
-		userSignOut().catch((error) => {
-			console.error('Error signing out expired session:', error);
-		});
 		toast.error($i18n.t('Session expired. Please sign in again.'));
 		isAuthRedirectInProgress = false;
 	};
@@ -953,7 +815,14 @@
 			return;
 		}
 
-		if (now >= exp - TOKEN_EXPIRY_BUFFER) {
+		if (now >= exp - Math.max(TOKEN_EXPIRY_BUFFER, window.tether ? 90 : 0)) {
+			if (window.tether) {
+				try {
+					if (await renewTetherSession()) return;
+				} catch {
+					return;
+				}
+			}
 			clearExpiredSession();
 		}
 	};
@@ -968,47 +837,19 @@
 			await goto(event.data.path);
 			return;
 		}
-		if (event.type === 'query' && (event.data?.query || event.data?.files?.length)) {
-			desktopEvent.set(event);
-			await goto('/');
-			return;
-		}
 		if (event.type === 'call') {
-			desktopEvent.set(event);
+			desktopEvent.set({ type: 'call' });
 			await goto('/');
 			return;
 		}
 		if (event.type === 'theme:update' && event.data?.theme) {
-			const newTheme = event.data.theme;
-			localStorage.setItem('theme', newTheme);
-			theme.set(newTheme);
-
-			// Apply theme classes (mirrors logic from chat/Settings/General.svelte)
-			const themes = ['dark', 'light', 'oled-dark'];
-			let themeToApply =
-				newTheme === 'oled-dark' ? 'dark' : newTheme === 'her' ? 'light' : newTheme;
-			if (newTheme === 'system') {
-				themeToApply = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-			}
-			themes
-				.filter((e) => e !== themeToApply)
-				.forEach((e) => {
-					e.split(' ').forEach((cls) => document.documentElement.classList.remove(cls));
-				});
-			themeToApply.split(' ').forEach((cls) => document.documentElement.classList.add(cls));
+			setTheme(event.data.theme);
 			return;
 		}
 		if (event.type === 'models:refresh') {
 			const token = localStorage.token;
 			if (token) {
-				models.set(
-					await getModels(
-						token,
-						$config?.features?.enable_direct_connections
-							? ($settings?.directConnections ?? null)
-							: null
-					)
-				);
+				models.set(await getModels(token));
 			}
 			return;
 		}
@@ -1047,11 +888,7 @@
 	};
 
 	const windowMessageEventHandler = async (event) => {
-		if (
-			!['https://openwebui.com', 'https://www.openwebui.com', 'http://localhost:9999'].includes(
-				event.origin
-			)
-		) {
+		if (!COMMUNITY_ORIGINS.includes(event.origin)) {
 			return;
 		}
 
@@ -1063,6 +900,7 @@
 
 	onMount(async () => {
 		const originalFetch = window.fetch.bind(window);
+		stopTether = await initializeTether(originalFetch);
 		window.fetch = async (input, init) => {
 			const response = await originalFetch(input, init);
 
@@ -1072,6 +910,13 @@
 				isAuthenticatedBackendFetch(input, init) &&
 				(await isCurrentSessionUnauthorized(originalFetch))
 			) {
+				if (window.tether) {
+					try {
+						if (await renewTetherSession(true)) return response;
+					} catch {
+						return response;
+					}
+				}
 				clearExpiredSession();
 			}
 
@@ -1202,7 +1047,13 @@
 		};
 		window.addEventListener('resize', onResize);
 
-		user.subscribe(async (value) => {
+		let queueUserId = $user?.id;
+		const unsubscribeQueueUser = user.subscribe(async (value) => {
+			if (queueUserId !== value?.id) {
+				clearFolderStates();
+				channelRequestQueues.set({});
+				queueUserId = value?.id;
+			}
 			if (value) {
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('events:channel', channelEventHandler);
@@ -1221,9 +1072,21 @@
 			}
 		});
 
+		/** @param {BeforeUnloadEvent} event */
+		const beforeUnloadHandler = (event) => {
+			if (Object.values($channelRequestQueues).some((queue) => queue.length)) {
+				event.preventDefault();
+				event.returnValue = '';
+			}
+		};
+		window.addEventListener('beforeunload', beforeUnloadHandler);
+
+		const sessionUserRequest = localStorage.token ? getSessionUser(localStorage.token) : null;
+		sessionUserRequest?.catch(() => {});
+
 		let backendConfig = null;
 		try {
-			backendConfig = await getBackendConfig();
+			backendConfig = await getBackendConfig(localStorage.token);
 			console.log('Backend config:', backendConfig);
 		} catch (error) {
 			if (error?.authRedirect) {
@@ -1237,7 +1100,7 @@
 		// Initialize i18n even if we didn't get a backend config,
 		// so `/error` can show something that's not `undefined`.
 
-		initI18n(localStorage?.locale);
+		await initI18n(backendConfig?.default_locale, backendConfig?.i18n ?? {});
 		if (!localStorage.locale) {
 			const languages = await getLanguages();
 			const browserLanguages = navigator.languages
@@ -1246,8 +1109,7 @@
 			const lang = backendConfig?.default_locale
 				? backendConfig.default_locale
 				: bestMatchingLanguage(languages, browserLanguages, 'en-US');
-			changeLanguage(lang);
-			dayjs.locale(lang);
+			await changeLanguage(lang);
 		}
 
 		if (backendConfig) {
@@ -1262,20 +1124,15 @@
 			if ($config) {
 				await setupSocket($config.features?.enable_websocket ?? true);
 
-				if (localStorage.token) {
+				if (sessionUserRequest) {
 					// Get Session User Info
-					const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
+					const sessionUser = await sessionUserRequest.catch((error) => {
 						toast.error(`${error}`);
 						return null;
 					});
 
 					if (sessionUser) {
 						await user.set(sessionUser);
-						try {
-							await config.set(await getBackendConfig());
-						} catch (error) {
-							console.error('Error refreshing backend config:', error);
-						}
 
 						// Keep user timezone in sync on every app load/refresh
 						const timezone = getUserTimezone();
@@ -1353,6 +1210,8 @@
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('pagehide', handlePageHidden);
 			window.removeEventListener('pageshow', handlePageVisible);
+			window.removeEventListener('beforeunload', beforeUnloadHandler);
+			unsubscribeQueueUser();
 		};
 	});
 
@@ -1361,12 +1220,30 @@
 			'high-contrast',
 			$settings?.highContrastMode ?? false
 		);
+
+		const viewport = document.querySelector('meta[name="viewport"]');
+		if (viewport) {
+			viewport.content = viewport.content.replace(
+				/maximum-scale=[\d.]+/,
+				`maximum-scale=${$settings?.highContrastMode ? 5 : 1}`
+			);
+		}
 	}
 
+	$: if (typeof window !== 'undefined')
+		setNotificationSoundEnabled($settings?.notificationSound ?? true);
+
+	const unlockNotificationSound = () => {
+		if ($settings?.notificationSound ?? true) void unlockNotificationAudio();
+	};
+
 	onDestroy(() => {
+		stopTether();
 		bc.close();
 	});
 </script>
+
+<svelte:window on:click={unlockNotificationSound} on:keydown={unlockNotificationSound} />
 
 <svelte:head>
 	<!-- LICENSE covers this Open WebUI branding surface, including name, logo,
@@ -1401,38 +1278,39 @@
 {/if}
 
 {#if loaded}
-	{#if $isApp}
-		<div class="flex flex-row h-screen">
-			<AppSidebar />
-
-			<div class="w-full flex-1 max-w-[calc(100%-4.5rem)]">
+	<div class="flex h-dvh w-full overflow-hidden">
+		<div class="min-w-0 flex-1">
+			{#if mfaManagement}
+				<MfaManagement flow={mfaManagement} onClose={() => (mfaManagement = null)} />
+			{:else}
 				<slot />
-			</div>
+			{/if}
 		</div>
-	{:else}
-		<slot />
-	{/if}
+		<CommentsHost />
+	</div>
 {/if}
 
 {#if $config?.features.enable_community_sharing}
 	<SyncStatsModal bind:show={showSyncStatsModal} eventData={syncStatsEventData} />
 {/if}
 
-<Toaster
-	theme={$theme.includes('dark')
-		? 'dark'
-		: $theme === 'system'
-			? window.matchMedia('(prefers-color-scheme: dark)').matches
-				? 'dark'
-				: 'light'
-			: 'light'}
-	richColors
-	position="top-right"
-	closeButton
-	toastOptions={{
-		classes: {
-			closeButton:
-				'!bg-white/80 !text-gray-500 !border-gray-200 hover:!bg-gray-50 hover:!text-gray-700 dark:!bg-gray-850 dark:!text-gray-400 dark:!border-gray-700 dark:hover:!bg-gray-800 dark:hover:!text-gray-200'
-		}
-	}}
-/>
+<div aria-live="polite">
+	<Toaster
+		theme={$theme.includes('dark')
+			? 'dark'
+			: $theme === 'system'
+				? window.matchMedia('(prefers-color-scheme: dark)').matches
+					? 'dark'
+					: 'light'
+				: 'light'}
+		richColors
+		position="top-right"
+		closeButton
+		toastOptions={{
+			classes: {
+				closeButton:
+					'!bg-white/80 !text-gray-500 !border-gray-200 hover:!bg-gray-50 hover:!text-gray-700 dark:!bg-gray-850 dark:!text-gray-400 dark:!border-gray-700 dark:hover:!bg-gray-800 dark:hover:!text-gray-200'
+			}
+		}}
+	/>
+</div>

@@ -12,11 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 log = logging.getLogger(__name__)
 
 
-####################
 # Folder DB Schema
 # Let every room in this house shelter someone who needs it,
 # and let no chamber stand empty while there is want.
-####################
 
 
 class Folder(Base):
@@ -54,6 +52,7 @@ class FolderMetadataResponse(BaseModel):
 
 class FolderNameIdResponse(BaseModel):
     id: str
+    user_id: str
     name: str
     meta: Optional[FolderMetadataResponse] = None
     parent_id: Optional[str] = None
@@ -77,9 +76,23 @@ class SharedFolderResponse(BaseModel):
     updated_at: int
 
 
-####################
 # Forms
-####################
+
+
+def folder_status_ids(meta: dict | None) -> tuple[str, ...]:
+    """The statuses this folder defines in meta.statuses, in order. Chats may also have none (null)."""
+    statuses = (meta or {}).get('statuses')
+    ids: list[str] = []
+    for item in statuses if isinstance(statuses, list) else []:
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get('id'), str)
+            and 0 < len(item['id']) <= 64
+            and item['id'] != 'none'
+            and item['id'] not in ids
+        ):
+            ids.append(item['id'])
+    return tuple(ids)
 
 
 class FolderForm(BaseModel):
@@ -166,13 +179,14 @@ class FolderTable:
         self, user_id: str, user_group_ids: set[str], db: Optional[AsyncSession] = None
     ) -> dict[str, str]:
         """
-        Returns {folder_id: highest_permission} for all folders shared with user.
+        Returns {folder_id: highest_permission} for folders shared with or by user.
         Checks direct user grants, group grants, and public (user:*) grants.
         """
         from open_webui.models.access_grants import AccessGrant
 
         async with get_async_db_context(db) as db:
             conditions = [
+                AccessGrant.resource_id.in_(select(Folder.id).where(Folder.user_id == user_id)),
                 and_(AccessGrant.principal_type == 'user', AccessGrant.principal_id == '*'),
                 and_(AccessGrant.principal_type == 'user', AccessGrant.principal_id == user_id),
             ]

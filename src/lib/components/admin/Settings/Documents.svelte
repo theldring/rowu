@@ -1,7 +1,9 @@
 <script lang="ts">
+	import { config } from '$lib/stores';
+	import { getBackendConfig } from '$lib/apis';
 	import { toast } from 'svelte-sonner';
 
-	import { onMount, getContext, createEventDispatcher } from 'svelte';
+	import { onMount, getContext, createEventDispatcher, tick } from 'svelte';
 
 	const dispatch = createEventDispatcher();
 
@@ -30,9 +32,11 @@
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import SettingsSelect from '$lib/components/common/SettingsSelect.svelte';
+	import Collapsible from '$lib/components/common/Collapsible.svelte';
 	import AdminSettingField from './AdminSettingField.svelte';
 	import AdminSettingRow from './AdminSettingRow.svelte';
 	import AdminSettingSection from './AdminSettingSection.svelte';
+	import AdminSettingSaveButton from './AdminSettingSaveButton.svelte';
 
 	const i18n: any = getContext('i18n');
 
@@ -42,10 +46,13 @@
 	let showResetConfirm = false;
 	let showResetUploadDirConfirm = false;
 	let showReindexConfirm = false;
+	let showEmbeddingAdvanced = false;
 	let showExternalDocumentLoaderHeadersHint = false;
 
 	let RAG_EMBEDDING_ENGINE = '';
 	let RAG_EMBEDDING_MODEL = '';
+	let RAG_EMBEDDING_QUERY_PREFIX = '';
+	let RAG_EMBEDDING_CONTENT_PREFIX = '';
 	let RAG_EMBEDDING_BATCH_SIZE = 1;
 	let ENABLE_ASYNC_EMBEDDING = true;
 	let RAG_EMBEDDING_CONCURRENT_REQUESTS = 0;
@@ -71,6 +78,141 @@
 	};
 
 	let RAGConfig: any = null;
+
+	let savedConfig: Record<string, any> | null = null;
+	$: embeddingSettings = {
+		RAG_EMBEDDING_ENGINE,
+		RAG_EMBEDDING_MODEL,
+		RAG_EMBEDDING_QUERY_PREFIX,
+		RAG_EMBEDDING_CONTENT_PREFIX,
+		RAG_EMBEDDING_BATCH_SIZE,
+		ENABLE_ASYNC_EMBEDDING,
+		RAG_EMBEDDING_CONCURRENT_REQUESTS,
+		RAG_OPENAI_API_BASE_URL: OpenAIUrl,
+		RAG_OPENAI_API_KEY: OpenAIKey,
+		RAG_OLLAMA_BASE_URL: OllamaUrl,
+		RAG_OLLAMA_API_KEY: OllamaKey,
+		RAG_AZURE_OPENAI_BASE_URL: AzureOpenAIUrl,
+		RAG_AZURE_OPENAI_API_KEY: AzureOpenAIKey,
+		RAG_AZURE_OPENAI_API_VERSION: AzureOpenAIVersion
+	};
+	$: settings = { ...RAGConfig, ...embeddingSettings };
+	$: settingLabels = {
+		CONTENT_EXTRACTION_ENGINE: $i18n.t('settings.admin.documents.contentExtractionEngine.label'),
+		CONTENT_EXTRACTION_SUPPORTED_MEDIA_MIME_TYPES: $i18n.t(
+			'settings.admin.documents.supportedMediaMimeTypes.label'
+		),
+		PDF_EXTRACT_IMAGES: $i18n.t('settings.admin.documents.pdfExtractImagesOcr.label'),
+		PDF_LOADER_MODE: $i18n.t('settings.admin.documents.pdfLoaderMode.label'),
+		DATALAB_MARKER_API_BASE_URL: $i18n.t('settings.admin.documents.datalabMarkerApiBaseUrl.label'),
+		DATALAB_MARKER_API_KEY: $i18n.t('settings.admin.documents.datalabMarkerApiKey.label'),
+		DATALAB_MARKER_ADDITIONAL_CONFIG: $i18n.t('settings.admin.documents.additionalConfig.label'),
+		DATALAB_MARKER_USE_LLM: $i18n.t('settings.admin.documents.useLlm.label'),
+		DATALAB_MARKER_SKIP_CACHE: $i18n.t('settings.admin.documents.skipCache.label'),
+		DATALAB_MARKER_FORCE_OCR: $i18n.t('settings.admin.documents.forceOcr.label'),
+		DATALAB_MARKER_PAGINATE: $i18n.t('settings.admin.documents.paginate.label'),
+		DATALAB_MARKER_STRIP_EXISTING_OCR: $i18n.t('settings.admin.documents.stripExistingOcr.label'),
+		DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION: $i18n.t(
+			'settings.admin.documents.disableImageExtraction.label'
+		),
+		DATALAB_MARKER_FORMAT_LINES: $i18n.t('settings.admin.documents.formatLines.label'),
+		DATALAB_MARKER_OUTPUT_FORMAT: $i18n.t('settings.admin.documents.outputFormat.label'),
+		EXTERNAL_DOCUMENT_LOADER_URL: $i18n.t('settings.admin.documents.documentLoaderUrl.label'),
+		EXTERNAL_DOCUMENT_LOADER_API_KEY: $i18n.t(
+			'settings.admin.documents.externalDocumentLoaderApiKey.label'
+		),
+		EXTERNAL_DOCUMENT_LOADER_HEADERS: $i18n.t('settings.admin.documents.headers.label'),
+		TIKA_SERVER_URL: $i18n.t('settings.admin.documents.tikaServerUrl.label'),
+		TIKA_SERVER_VERSION: $i18n.t('settings.admin.documents.tikaServerVersion.label'),
+		DOCLING_SERVER_URL: $i18n.t('settings.admin.documents.doclingServerUrl.label'),
+		DOCLING_API_KEY: $i18n.t('settings.admin.documents.doclingApiKey.label'),
+		DOCLING_PARAMS: $i18n.t('settings.admin.documents.doclingParams.label'),
+		DOCUMENT_INTELLIGENCE_ENDPOINT: $i18n.t('settings.admin.documents.endpoint.label'),
+		DOCUMENT_INTELLIGENCE_KEY: $i18n.t('settings.admin.documents.documentIntelligenceKey.label'),
+		DOCUMENT_INTELLIGENCE_MODEL: $i18n.t(
+			'settings.admin.documents.documentIntelligenceModel.label'
+		),
+		MISTRAL_OCR_API_BASE_URL: $i18n.t('settings.admin.documents.mistralOcrApiBaseUrl.label'),
+		MISTRAL_OCR_API_KEY: $i18n.t('settings.admin.documents.mistralOcrApiKey.label'),
+		MISTRAL_OCR_USE_BASE64: $i18n.t('settings.admin.documents.useBase64.label'),
+		MISTRAL_OCR_PARAMS: $i18n.t('settings.admin.documents.mistralOcrParams.label'),
+		PADDLEOCR_VL_BASE_URL: $i18n.t('settings.admin.documents.paddleocrVlBaseUrl.label'),
+		PADDLEOCR_VL_TOKEN: $i18n.t('settings.admin.documents.apiToken.label'),
+		MINERU_API_MODE: $i18n.t('settings.admin.documents.apiMode.label'),
+		MINERU_API_URL: $i18n.t('settings.admin.documents.apiUrl.label'),
+		MINERU_API_KEY: $i18n.t('settings.admin.documents.mineruApiKey.label'),
+		MINERU_API_TIMEOUT: $i18n.t('settings.admin.documents.apiTimeout.label'),
+		MINERU_PARAMS: $i18n.t('settings.admin.documents.mineruParams.label'),
+		MINERU_FILE_EXTENSIONS: $i18n.t('settings.admin.documents.fileExtensions.label'),
+		BYPASS_EMBEDDING_AND_RETRIEVAL: $i18n.t(
+			'settings.admin.documents.bypassEmbeddingAndRetrieval.label'
+		),
+		TEXT_SPLITTER: $i18n.t('settings.admin.documents.textSplitter.label'),
+		RAG_TOKENIZER_MODEL: $i18n.t('settings.admin.documents.tokenizerModel.label'),
+		ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER: $i18n.t(
+			'settings.admin.documents.markdownHeaderTextSplitter.label'
+		),
+		CHUNK_SIZE: $i18n.t('settings.admin.documents.chunkSize.label'),
+		CHUNK_OVERLAP: $i18n.t('settings.admin.documents.chunkOverlap.label'),
+		CHUNK_MIN_SIZE_TARGET: $i18n.t('settings.admin.documents.chunkMinSizeTarget.label'),
+		RAG_EMBEDDING_ENGINE: $i18n.t('settings.admin.documents.embeddingModelEngine.label'),
+		RAG_OPENAI_API_BASE_URL: $i18n.t('settings.admin.documents.openaiurl.label'),
+		RAG_OPENAI_API_KEY: $i18n.t('settings.admin.documents.openaikey.label'),
+		RAG_OLLAMA_BASE_URL: $i18n.t('settings.admin.documents.ollamaurl.label'),
+		RAG_OLLAMA_API_KEY: $i18n.t('settings.admin.documents.ollamakey.label'),
+		RAG_AZURE_OPENAI_BASE_URL: $i18n.t('settings.admin.documents.azureopenaiurl.label'),
+		RAG_AZURE_OPENAI_API_KEY: $i18n.t('settings.admin.documents.azureopenaikey.label'),
+		RAG_AZURE_OPENAI_API_VERSION: $i18n.t('settings.admin.documents.version.label'),
+		RAG_EMBEDDING_MODEL: $i18n.t('settings.admin.documents.embeddingModel.label'),
+		RAG_EMBEDDING_BATCH_SIZE: $i18n.t('settings.admin.documents.embeddingBatchSize.label'),
+		ENABLE_ASYNC_EMBEDDING: $i18n.t('settings.admin.documents.asyncEmbeddingProcessing.label'),
+		RAG_EMBEDDING_CONCURRENT_REQUESTS: $i18n.t(
+			'settings.admin.documents.embeddingConcurrentRequests.label'
+		),
+		RAG_EMBEDDING_QUERY_PREFIX: $i18n.t('settings.admin.documents.embeddingQueryPrefix.label'),
+		RAG_EMBEDDING_CONTENT_PREFIX: $i18n.t('settings.admin.documents.embeddingContentPrefix.label'),
+		RAG_FULL_TEXT_CHAR_THRESHOLD: $i18n.t('settings.admin.documents.fullTextCharThreshold.label'),
+		RAG_FULL_CONTEXT: $i18n.t('settings.admin.documents.fullContextMode.label'),
+		ENABLE_RAG_HYBRID_SEARCH: $i18n.t('settings.admin.documents.hybridSearch.label'),
+		ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS: $i18n.t(
+			'settings.admin.documents.enrichHybridSearchText.label'
+		),
+		RAG_RERANKING_ENGINE: $i18n.t('settings.admin.documents.rerankingEngine.label'),
+		RAG_EXTERNAL_RERANKER_URL: $i18n.t('settings.admin.documents.ragExternalRerankerUrl.label'),
+		RAG_EXTERNAL_RERANKER_API_KEY: $i18n.t(
+			'settings.admin.documents.ragExternalRerankerApiKey.label'
+		),
+		RAG_RERANKING_MODEL: $i18n.t('settings.admin.documents.rerankingModel.label'),
+		RAG_RERANKING_BATCH_SIZE: $i18n.t('settings.admin.documents.rerankingBatchSize.label'),
+		TOP_K: $i18n.t('settings.admin.documents.topK.label'),
+		TOP_K_RERANKER: $i18n.t('settings.admin.documents.topKReranker.label'),
+		RELEVANCE_THRESHOLD: $i18n.t('settings.admin.documents.relevanceThreshold.label'),
+		HYBRID_BM25_WEIGHT: $i18n.t('settings.admin.documents.bm25Weight.label'),
+		RAG_TEMPLATE: $i18n.t('settings.admin.documents.ragTemplate.label'),
+		ALLOWED_FILE_EXTENSIONS: $i18n.t('settings.admin.documents.allowedFileExtensions.label'),
+		FILE_MAX_SIZE: $i18n.t('settings.admin.documents.maxUploadSize.label'),
+		FILE_MAX_COUNT: $i18n.t('settings.admin.documents.maxUploadCount.label'),
+		KNOWLEDGE_MAX_UPLOAD_COUNT: $i18n.t('settings.admin.documents.knowledgeMaxUploadCount.label'),
+		KNOWLEDGE_MAX_FILE_SIZE: $i18n.t('settings.admin.documents.knowledgeMaxSize.label'),
+		KNOWLEDGE_MAX_FILE_COUNT: $i18n.t('settings.admin.documents.knowledgeMaxCount.label'),
+		FILE_IMAGE_COMPRESSION_WIDTH: $i18n.t('settings.admin.documents.imageCompressionWidth.label'),
+		FILE_IMAGE_COMPRESSION_HEIGHT: $i18n.t('settings.admin.documents.imageCompressionHeight.label'),
+		ENABLE_GOOGLE_DRIVE_INTEGRATION: $i18n.t('settings.admin.documents.googleDrive.label'),
+		ENABLE_ONEDRIVE_INTEGRATION: $i18n.t('settings.admin.documents.onedrive.label')
+	};
+	const sensitiveKeys = [
+		'DATALAB_MARKER_API_KEY',
+		'EXTERNAL_DOCUMENT_LOADER_API_KEY',
+		'DOCLING_API_KEY',
+		'DOCUMENT_INTELLIGENCE_KEY',
+		'MISTRAL_OCR_API_KEY',
+		'PADDLEOCR_VL_TOKEN',
+		'MINERU_API_KEY',
+		'RAG_OPENAI_API_KEY',
+		'RAG_OLLAMA_API_KEY',
+		'RAG_AZURE_OPENAI_API_KEY',
+		'RAG_EXTERNAL_RERANKER_API_KEY'
+	];
 	const inputClass =
 		'w-full h-7 rounded-lg border border-gray-100/50 bg-gray-50/40 px-2 text-xs text-gray-700 outline-hidden transition-colors placeholder:text-gray-300 focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-gray-300 dark:placeholder:text-gray-700 dark:focus:border-blue-500';
 	const actionButtonClass =
@@ -79,14 +221,7 @@
 		'w-full rounded-lg border border-gray-100/50 bg-gray-50/40 px-2 py-1.5 text-xs text-gray-700 outline-hidden transition-colors placeholder:text-gray-300 focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-gray-300 dark:placeholder:text-gray-700 dark:focus:border-blue-500';
 
 	const embeddingModelUpdateHandler = async () => {
-		if (RAG_EMBEDDING_ENGINE === '' && RAG_EMBEDDING_MODEL.split('/').length - 1 > 1) {
-			toast.error(
-				$i18n.t(
-					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
-				)
-			);
-			return;
-		}
+		if (updateEmbeddingModelLoading) return;
 		if (RAG_EMBEDDING_ENGINE === 'ollama' && RAG_EMBEDDING_MODEL === '') {
 			toast.error(
 				$i18n.t(
@@ -125,6 +260,8 @@
 		const payload: Parameters<typeof updateEmbeddingConfig>[1] = {
 			RAG_EMBEDDING_ENGINE: RAG_EMBEDDING_ENGINE,
 			RAG_EMBEDDING_MODEL: RAG_EMBEDDING_MODEL,
+			RAG_EMBEDDING_QUERY_PREFIX,
+			RAG_EMBEDDING_CONTENT_PREFIX,
 			RAG_EMBEDDING_BATCH_SIZE: RAG_EMBEDDING_BATCH_SIZE,
 			ENABLE_ASYNC_EMBEDDING: ENABLE_ASYNC_EMBEDDING,
 			RAG_EMBEDDING_CONCURRENT_REQUESTS: RAG_EMBEDDING_CONCURRENT_REQUESTS
@@ -157,6 +294,7 @@
 
 		if (res) {
 			console.debug('embeddingModelUpdateHandler:', res);
+			savedConfig = { ...savedConfig, ...structuredClone(embeddingSettings) };
 		}
 	};
 
@@ -168,10 +306,7 @@
 			toast.error($i18n.t('External Document Loader URL required.'));
 			return;
 		}
-		if (
-			RAGConfig.CONTENT_EXTRACTION_ENGINE === 'external' &&
-			RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS
-		) {
+		if (RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS) {
 			try {
 				const headers = JSON.parse(RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS);
 				if (headers === null || typeof headers !== 'object' || Array.isArray(headers)) {
@@ -259,6 +394,18 @@
 				return;
 			}
 		}
+		if (RAGConfig.MISTRAL_OCR_PARAMS) {
+			try {
+				JSON.parse(RAGConfig.MISTRAL_OCR_PARAMS);
+			} catch {
+				toast.error(
+					$i18n.t('Invalid JSON format in {{NAME}}', {
+						NAME: $i18n.t('Mistral OCR Parameters')
+					})
+				);
+				return;
+			}
+		}
 
 		const res = await updateRAGConfig(localStorage.token, {
 			...RAGConfig,
@@ -266,6 +413,9 @@
 			// can distinguish "clear this field" from "don't change this field"
 			FILE_MAX_SIZE: RAGConfig.FILE_MAX_SIZE ?? '',
 			FILE_MAX_COUNT: RAGConfig.FILE_MAX_COUNT ?? '',
+			KNOWLEDGE_MAX_UPLOAD_COUNT: RAGConfig.KNOWLEDGE_MAX_UPLOAD_COUNT ?? '',
+			KNOWLEDGE_MAX_FILE_COUNT: RAGConfig.KNOWLEDGE_MAX_FILE_COUNT ?? '',
+			KNOWLEDGE_MAX_FILE_SIZE: RAGConfig.KNOWLEDGE_MAX_FILE_SIZE ?? '',
 			FILE_IMAGE_COMPRESSION_WIDTH: RAGConfig.FILE_IMAGE_COMPRESSION_WIDTH ?? '',
 			FILE_IMAGE_COMPRESSION_HEIGHT: RAGConfig.FILE_IMAGE_COMPRESSION_HEIGHT ?? '',
 			ALLOWED_FILE_EXTENSIONS: RAGConfig.ALLOWED_FILE_EXTENSIONS.split(',')
@@ -286,6 +436,11 @@
 					: RAGConfig.CONTENT_EXTRACTION_SUPPORTED_MEDIA_MIME_TYPES.split(',')
 							.map((mimeType: string) => mimeType.trim())
 							.filter((mimeType: string) => mimeType !== ''),
+			MISTRAL_OCR_PARAMS:
+				typeof RAGConfig.MISTRAL_OCR_PARAMS === 'string' &&
+				RAGConfig.MISTRAL_OCR_PARAMS.trim() !== ''
+					? JSON.parse(RAGConfig.MISTRAL_OCR_PARAMS)
+					: {},
 			MINERU_PARAMS:
 				typeof RAGConfig.MINERU_PARAMS === 'string' && RAGConfig.MINERU_PARAMS.trim() !== ''
 					? JSON.parse(RAGConfig.MINERU_PARAMS)
@@ -294,6 +449,10 @@
 				.map((ext) => ext.trim())
 				.filter((ext) => ext !== '')
 		});
+		if (res) {
+			config.set(await getBackendConfig());
+			savedConfig = { ...savedConfig, ...structuredClone(RAGConfig) };
+		}
 		dispatch('save');
 	};
 
@@ -303,6 +462,9 @@
 		if (embeddingConfig) {
 			RAG_EMBEDDING_ENGINE = embeddingConfig.RAG_EMBEDDING_ENGINE;
 			RAG_EMBEDDING_MODEL = embeddingConfig.RAG_EMBEDDING_MODEL;
+			RAG_EMBEDDING_QUERY_PREFIX = embeddingConfig.RAG_EMBEDDING_QUERY_PREFIX ?? '';
+			RAG_EMBEDDING_CONTENT_PREFIX = embeddingConfig.RAG_EMBEDDING_CONTENT_PREFIX ?? '';
+			showEmbeddingAdvanced = Boolean(RAG_EMBEDDING_QUERY_PREFIX || RAG_EMBEDDING_CONTENT_PREFIX);
 			RAG_EMBEDDING_BATCH_SIZE = embeddingConfig.RAG_EMBEDDING_BATCH_SIZE ?? 1;
 			ENABLE_ASYNC_EMBEDDING = embeddingConfig.ENABLE_ASYNC_EMBEDDING ?? true;
 			RAG_EMBEDDING_CONCURRENT_REQUESTS = embeddingConfig.RAG_EMBEDDING_CONCURRENT_REQUESTS ?? 0;
@@ -334,6 +496,11 @@
 				? JSON.stringify(config.MINERU_PARAMS ?? {}, null, 2)
 				: config.MINERU_PARAMS;
 
+		config.MISTRAL_OCR_PARAMS =
+			typeof config.MISTRAL_OCR_PARAMS === 'object'
+				? JSON.stringify(config.MISTRAL_OCR_PARAMS ?? {}, null, 2)
+				: config.MISTRAL_OCR_PARAMS;
+
 		config.EXTERNAL_DOCUMENT_LOADER_HEADERS =
 			typeof config.EXTERNAL_DOCUMENT_LOADER_HEADERS === 'object'
 				? Object.keys(config.EXTERNAL_DOCUMENT_LOADER_HEADERS ?? {}).length > 0
@@ -347,6 +514,9 @@
 		config.RAG_TOKENIZER_MODEL = config?.RAG_TOKENIZER_MODEL ?? '';
 
 		RAGConfig = config;
+
+		await tick();
+		savedConfig = structuredClone(settings);
 	});
 </script>
 
@@ -420,17 +590,37 @@
 		submitHandler();
 	}}
 >
-	<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">{$i18n.t('Documents')}</h2>
+	<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
+		{$i18n.t('settings.admin.documents.title')}
+	</h2>
+	{#if $config?.features?.slim === true}
+		<p class="mb-4 text-xs text-gray-500">
+			{$i18n.t(
+				'Slim requires external services for embeddings, vector storage, and document extraction. Basic text files can be read locally.'
+			)}
+		</p>
+	{/if}
 
 	{#if RAGConfig}
 		<div class="flex-1 min-h-0 overflow-y-auto scrollbar-hover pr-1.5">
-			<AdminSettingSection title={$i18n.t('Content Extraction')} first>
+			<AdminSettingSection
+				title={$i18n.t('settings.admin.documents.sections.contentExtraction.title')}
+				first
+			>
 				<AdminSettingRow
-					label={$i18n.t('Content Extraction Engine')}
-					description={$i18n.t('Choose how uploaded documents are parsed before indexing.')}
+					label={$i18n.t('settings.admin.documents.contentExtractionEngine.label')}
+					description={$i18n.t('settings.admin.documents.contentExtractionEngine.description')}
+					let:labelId
 				>
-					<SettingsSelect bind:value={RAGConfig.CONTENT_EXTRACTION_ENGINE}>
-						<option value="">{$i18n.t('Default')}</option>
+					<SettingsSelect
+						id={`${labelId}-control`}
+						bind:value={RAGConfig.CONTENT_EXTRACTION_ENGINE}
+					>
+						<option value=""
+							>{$config?.features?.slim === true
+								? $i18n.t('Basic text only')
+								: $i18n.t('Default')}</option
+						>
 						<option value="external">{$i18n.t('External')}</option>
 						<option value="tika">{$i18n.t('Tika')}</option>
 						<option value="docling">{$i18n.t('Docling')}</option>
@@ -443,44 +633,45 @@
 				</AdminSettingRow>
 
 				<AdminSettingField
-					label={$i18n.t('Supported Media MIME Types')}
-					description={$i18n.t(
-						'Media upload MIME types the content extraction engine may process.'
-					)}
+					label={$i18n.t('settings.admin.documents.supportedMediaMimeTypes.label')}
+					description={$i18n.t('settings.admin.documents.supportedMediaMimeTypes.description')}
+					forId="supported-media-mime-types"
 				>
 					<input
+						id="supported-media-mime-types"
 						class={inputClass}
 						placeholder={$i18n.t('image/*, video/*')}
 						bind:value={RAGConfig.CONTENT_EXTRACTION_SUPPORTED_MEDIA_MIME_TYPES}
 					/>
 				</AdminSettingField>
 
-				{#if RAGConfig.CONTENT_EXTRACTION_ENGINE === ''}
+				{#if RAGConfig.CONTENT_EXTRACTION_ENGINE === '' && $config?.features?.slim !== true}
 					<AdminSettingRow
-						label={$i18n.t('PDF Extract Images (OCR)')}
-						description={$i18n.t('Extract images from PDFs so OCR can process image-only pages.')}
+						label={$i18n.t('settings.admin.documents.pdfExtractImagesOcr.label')}
+						description={$i18n.t('settings.admin.documents.pdfExtractImagesOcr.description')}
 						let:labelId
 					>
 						<Switch bind:state={RAGConfig.PDF_EXTRACT_IMAGES} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 
 					<AdminSettingRow
-						label={$i18n.t('PDF Loader Mode')}
-						description={$i18n.t(
-							'Page mode creates one document per page. Single mode keeps pages together for chunking across boundaries.'
-						)}
+						label={$i18n.t('settings.admin.documents.pdfLoaderMode.label')}
+						description={$i18n.t('settings.admin.documents.pdfLoaderMode.description')}
+						let:labelId
 					>
-						<SettingsSelect bind:value={RAGConfig.PDF_LOADER_MODE}>
+						<SettingsSelect id={`${labelId}-control`} bind:value={RAGConfig.PDF_LOADER_MODE}>
 							<option value="page">{$i18n.t('Page')}</option>
 							<option value="single">{$i18n.t('Single')}</option>
 						</SettingsSelect>
 					</AdminSettingRow>
 				{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'datalab_marker'}
 					<AdminSettingField
-						label={$i18n.t('API Base URL')}
-						description={$i18n.t('Datalab Marker service endpoint used for document parsing.')}
+						label={$i18n.t('settings.admin.documents.datalabMarkerApiBaseUrl.label')}
+						description={$i18n.t('settings.admin.documents.datalabMarkerApiBaseUrl.description')}
+						forId="datalab-marker-api-base-url"
 					>
 						<input
+							id="datalab-marker-api-base-url"
 							class={inputClass}
 							placeholder={$i18n.t('Enter Datalab Marker API Base URL')}
 							bind:value={RAGConfig.DATALAB_MARKER_API_BASE_URL}
@@ -488,8 +679,8 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('API Key')}
-						description={$i18n.t('API key used to authenticate with Datalab Marker.')}
+						label={$i18n.t('settings.admin.documents.datalabMarkerApiKey.label')}
+						description={$i18n.t('settings.admin.documents.datalabMarkerApiKey.description')}
 					>
 						<SensitiveInput
 							variant="settings"
@@ -500,8 +691,9 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('Additional Config')}
-						description={$i18n.t('JSON options passed to Marker for advanced parsing behavior.')}
+						label={$i18n.t('settings.admin.documents.additionalConfig.label')}
+						description={$i18n.t('settings.admin.documents.additionalConfig.description')}
+						forId="datalab-marker-additional-config"
 					>
 						<Tooltip
 							content={$i18n.t(
@@ -511,46 +703,46 @@
 							className="w-full"
 						>
 							<Textarea
+								id="datalab-marker-additional-config"
 								className={textareaClass}
 								bind:value={RAGConfig.DATALAB_MARKER_ADDITIONAL_CONFIG}
+								maxSize={200}
 								placeholder={$i18n.t('Enter JSON config (e.g., {"disable_links": true})')}
 							/>
 						</Tooltip>
 					</AdminSettingField>
 
 					<AdminSettingRow
-						label={$i18n.t('Use LLM')}
-						description={$i18n.t(
-							'Use an LLM to improve tables, forms, math, and layout detection.'
-						)}
+						label={$i18n.t('settings.admin.documents.useLlm.label')}
+						description={$i18n.t('settings.admin.documents.useLlm.description')}
 						let:labelId
 					>
 						<Switch bind:state={RAGConfig.DATALAB_MARKER_USE_LLM} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 					<AdminSettingRow
-						label={$i18n.t('Skip Cache')}
-						description={$i18n.t('Skip cached Marker results and rerun inference.')}
+						label={$i18n.t('settings.admin.documents.skipCache.label')}
+						description={$i18n.t('settings.admin.documents.skipCache.description')}
 						let:labelId
 					>
 						<Switch bind:state={RAGConfig.DATALAB_MARKER_SKIP_CACHE} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 					<AdminSettingRow
-						label={$i18n.t('Force OCR')}
-						description={$i18n.t('Run OCR on all PDF pages, even pages with embedded text.')}
+						label={$i18n.t('settings.admin.documents.forceOcr.label')}
+						description={$i18n.t('settings.admin.documents.forceOcr.description')}
 						let:labelId
 					>
 						<Switch bind:state={RAGConfig.DATALAB_MARKER_FORCE_OCR} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 					<AdminSettingRow
-						label={$i18n.t('Paginate')}
-						description={$i18n.t('Separate output by page with page markers.')}
+						label={$i18n.t('settings.admin.documents.paginate.label')}
+						description={$i18n.t('settings.admin.documents.paginate.description')}
 						let:labelId
 					>
 						<Switch bind:state={RAGConfig.DATALAB_MARKER_PAGINATE} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 					<AdminSettingRow
-						label={$i18n.t('Strip Existing OCR')}
-						description={$i18n.t('Remove existing OCR text and rerun OCR when Force OCR is off.')}
+						label={$i18n.t('settings.admin.documents.stripExistingOcr.label')}
+						description={$i18n.t('settings.admin.documents.stripExistingOcr.description')}
 						let:labelId
 					>
 						<Switch
@@ -559,8 +751,8 @@
 						/>
 					</AdminSettingRow>
 					<AdminSettingRow
-						label={$i18n.t('Disable Image Extraction')}
-						description={$i18n.t('Do not extract images from PDFs during Marker processing.')}
+						label={$i18n.t('settings.admin.documents.disableImageExtraction.label')}
+						description={$i18n.t('settings.admin.documents.disableImageExtraction.description')}
 						let:labelId
 					>
 						<Switch
@@ -569,17 +761,21 @@
 						/>
 					</AdminSettingRow>
 					<AdminSettingRow
-						label={$i18n.t('Format Lines')}
-						description={$i18n.t('Format lines to detect inline math and styles.')}
+						label={$i18n.t('settings.admin.documents.formatLines.label')}
+						description={$i18n.t('settings.admin.documents.formatLines.description')}
 						let:labelId
 					>
 						<Switch bind:state={RAGConfig.DATALAB_MARKER_FORMAT_LINES} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 					<AdminSettingRow
-						label={$i18n.t('Output Format')}
-						description={$i18n.t('Text output format returned by Marker.')}
+						label={$i18n.t('settings.admin.documents.outputFormat.label')}
+						description={$i18n.t('settings.admin.documents.outputFormat.description')}
+						let:labelId
 					>
-						<SettingsSelect bind:value={RAGConfig.DATALAB_MARKER_OUTPUT_FORMAT}>
+						<SettingsSelect
+							id={`${labelId}-control`}
+							bind:value={RAGConfig.DATALAB_MARKER_OUTPUT_FORMAT}
+						>
 							<option value="markdown">{$i18n.t('Markdown')}</option>
 							<option value="json">{$i18n.t('JSON')}</option>
 							<option value="html">{$i18n.t('HTML')}</option>
@@ -588,18 +784,22 @@
 				{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'external'}
 					<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 						<AdminSettingField
-							label={$i18n.t('Document Loader URL')}
-							description={$i18n.t('External service endpoint used to load document content.')}
+							label={$i18n.t('settings.admin.documents.documentLoaderUrl.label')}
+							description={$i18n.t('settings.admin.documents.documentLoaderUrl.description')}
+							forId="external-document-loader-url"
 						>
 							<input
+								id="external-document-loader-url"
 								class={inputClass}
 								placeholder={$i18n.t('Enter External Document Loader URL')}
 								bind:value={RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL}
 							/>
 						</AdminSettingField>
 						<AdminSettingField
-							label={$i18n.t('API Key')}
-							description={$i18n.t('API key sent to the external document loader.')}
+							label={$i18n.t('settings.admin.documents.externalDocumentLoaderApiKey.label')}
+							description={$i18n.t(
+								'settings.admin.documents.externalDocumentLoaderApiKey.description'
+							)}
 						>
 							<SensitiveInput
 								variant="settings"
@@ -611,8 +811,9 @@
 					</div>
 
 					<AdminSettingField
-						label={$i18n.t('Headers')}
-						description={$i18n.t('Additional JSON headers sent to the external document loader.')}
+						label={$i18n.t('settings.admin.documents.headers.label')}
+						description={$i18n.t('settings.admin.documents.headers.description')}
+						forId="external-document-loader-headers"
 					>
 						<Tooltip
 							content={$i18n.t(
@@ -620,8 +821,10 @@
 							)}
 						>
 							<Textarea
+								id="external-document-loader-headers"
 								className={textareaClass}
 								bind:value={RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS}
+								maxSize={200}
 								placeholder={$i18n.t('Enter additional headers in JSON format')}
 								required={false}
 							/>
@@ -632,7 +835,7 @@
 							on:click={() =>
 								(showExternalDocumentLoaderHeadersHint = !showExternalDocumentLoaderHeadersHint)}
 						>
-							{$i18n.t('Header variables')}
+							{$i18n.t('settings.admin.documents.headerVariables.label')}
 						</button>
 						{#if showExternalDocumentLoaderHeadersHint}
 							<div class="mt-1 text-[0.6875rem] leading-5 text-gray-500 dark:text-gray-400">
@@ -655,20 +858,23 @@
 				{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'tika'}
 					<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 						<AdminSettingField
-							label={$i18n.t('Tika Server URL')}
-							description={$i18n.t('Tika server endpoint used for content extraction.')}
+							label={$i18n.t('settings.admin.documents.tikaServerUrl.label')}
+							description={$i18n.t('settings.admin.documents.tikaServerUrl.description')}
+							forId="tika-server-url"
 						>
 							<input
+								id="tika-server-url"
 								class={inputClass}
 								placeholder={$i18n.t('Enter Tika Server URL')}
 								bind:value={RAGConfig.TIKA_SERVER_URL}
 							/>
 						</AdminSettingField>
 						<AdminSettingField
-							label={$i18n.t('Tika Server Version')}
-							description={$i18n.t('Select the Tika server API version.')}
+							label={$i18n.t('settings.admin.documents.tikaServerVersion.label')}
+							description={$i18n.t('settings.admin.documents.tikaServerVersion.description')}
+							forId="tika-server-version"
 						>
-							<SettingsSelect bind:value={RAGConfig.TIKA_SERVER_VERSION}>
+							<SettingsSelect id="tika-server-version" bind:value={RAGConfig.TIKA_SERVER_VERSION}>
 								<option value="3">{$i18n.t('Tika 3.x')}</option>
 								<option value="4">{$i18n.t('Tika 4.x')}</option>
 							</SettingsSelect>
@@ -677,18 +883,20 @@
 				{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'docling'}
 					<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 						<AdminSettingField
-							label={$i18n.t('Docling Server URL')}
-							description={$i18n.t('Docling service endpoint used for parsing.')}
+							label={$i18n.t('settings.admin.documents.doclingServerUrl.label')}
+							description={$i18n.t('settings.admin.documents.doclingServerUrl.description')}
+							forId="docling-server-url"
 						>
 							<input
+								id="docling-server-url"
 								class={inputClass}
 								placeholder={$i18n.t('Enter Docling Server URL')}
 								bind:value={RAGConfig.DOCLING_SERVER_URL}
 							/>
 						</AdminSettingField>
 						<AdminSettingField
-							label={$i18n.t('API Key')}
-							description={$i18n.t('API key sent to Docling.')}
+							label={$i18n.t('settings.admin.documents.doclingApiKey.label')}
+							description={$i18n.t('settings.admin.documents.doclingApiKey.description')}
 						>
 							<SensitiveInput
 								variant="settings"
@@ -700,12 +908,15 @@
 					</div>
 
 					<AdminSettingField
-						label={$i18n.t('Parameters')}
-						description={$i18n.t('Additional Docling parameters in JSON format.')}
+						label={$i18n.t('settings.admin.documents.doclingParams.label')}
+						description={$i18n.t('settings.admin.documents.doclingParams.description')}
+						forId="docling-params"
 					>
 						<Textarea
+							id="docling-params"
 							className={textareaClass}
 							bind:value={RAGConfig.DOCLING_PARAMS}
+							maxSize={200}
 							placeholder={$i18n.t('Enter additional parameters in JSON format')}
 							minSize={100}
 						/>
@@ -713,18 +924,20 @@
 				{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'document_intelligence'}
 					<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 						<AdminSettingField
-							label={$i18n.t('Endpoint')}
-							description={$i18n.t('Document Intelligence endpoint used for parsing.')}
+							label={$i18n.t('settings.admin.documents.endpoint.label')}
+							description={$i18n.t('settings.admin.documents.endpoint.description')}
+							forId="document-intelligence-endpoint"
 						>
 							<input
+								id="document-intelligence-endpoint"
 								class={inputClass}
 								placeholder={$i18n.t('Enter Document Intelligence Endpoint')}
 								bind:value={RAGConfig.DOCUMENT_INTELLIGENCE_ENDPOINT}
 							/>
 						</AdminSettingField>
 						<AdminSettingField
-							label={$i18n.t('Key')}
-							description={$i18n.t('Credential used for Document Intelligence.')}
+							label={$i18n.t('settings.admin.documents.documentIntelligenceKey.label')}
+							description={$i18n.t('settings.admin.documents.documentIntelligenceKey.description')}
 						>
 							<SensitiveInput
 								variant="settings"
@@ -736,10 +949,12 @@
 					</div>
 
 					<AdminSettingField
-						label={$i18n.t('Document Intelligence Model')}
-						description={$i18n.t('Model name used by Document Intelligence.')}
+						label={$i18n.t('settings.admin.documents.documentIntelligenceModel.label')}
+						description={$i18n.t('settings.admin.documents.documentIntelligenceModel.description')}
+						forId="document-intelligence-model"
 					>
 						<input
+							id="document-intelligence-model"
 							class={inputClass}
 							placeholder={$i18n.t('Enter Document Intelligence Model')}
 							bind:value={RAGConfig.DOCUMENT_INTELLIGENCE_MODEL}
@@ -748,18 +963,20 @@
 				{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'mistral_ocr'}
 					<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 						<AdminSettingField
-							label={$i18n.t('API Base URL')}
-							description={$i18n.t('Mistral OCR service endpoint.')}
+							label={$i18n.t('settings.admin.documents.mistralOcrApiBaseUrl.label')}
+							description={$i18n.t('settings.admin.documents.mistralOcrApiBaseUrl.description')}
+							forId="mistral-ocr-api-base-url"
 						>
 							<input
+								id="mistral-ocr-api-base-url"
 								class={inputClass}
 								placeholder={$i18n.t('Enter Mistral API Base URL')}
 								bind:value={RAGConfig.MISTRAL_OCR_API_BASE_URL}
 							/>
 						</AdminSettingField>
 						<AdminSettingField
-							label={$i18n.t('API Key')}
-							description={$i18n.t('API key sent to Mistral OCR.')}
+							label={$i18n.t('settings.admin.documents.mistralOcrApiKey.label')}
+							description={$i18n.t('settings.admin.documents.mistralOcrApiKey.description')}
 						>
 							<SensitiveInput
 								variant="settings"
@@ -769,27 +986,43 @@
 						</AdminSettingField>
 					</div>
 					<AdminSettingRow
-						label={$i18n.t('Use Base64')}
-						description={$i18n.t('Send PDFs as base64 data URLs instead of uploading first.')}
+						label={$i18n.t('settings.admin.documents.useBase64.label')}
+						description={$i18n.t('settings.admin.documents.useBase64.description')}
 						let:labelId
 					>
 						<Switch bind:state={RAGConfig.MISTRAL_OCR_USE_BASE64} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
+					<AdminSettingField
+						label={$i18n.t('settings.admin.documents.mistralOcrParams.label')}
+						description={$i18n.t('settings.admin.documents.mistralOcrParams.description')}
+						forId="mistral-ocr-params"
+					>
+						<Textarea
+							id="mistral-ocr-params"
+							className={textareaClass}
+							bind:value={RAGConfig.MISTRAL_OCR_PARAMS}
+							maxSize={200}
+							placeholder={$i18n.t('Enter additional parameters in JSON format')}
+							minSize={100}
+						/>
+					</AdminSettingField>
 				{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'paddleocr_vl'}
 					<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 						<AdminSettingField
-							label={$i18n.t('API Base URL')}
-							description={$i18n.t('PaddleOCR-vl service endpoint.')}
+							label={$i18n.t('settings.admin.documents.paddleocrVlBaseUrl.label')}
+							description={$i18n.t('settings.admin.documents.paddleocrVlBaseUrl.description')}
+							forId="paddleocr-vl-base-url"
 						>
 							<input
+								id="paddleocr-vl-base-url"
 								class={inputClass}
 								placeholder={$i18n.t('Enter PaddleOCR-vl API Base URL')}
 								bind:value={RAGConfig.PADDLEOCR_VL_BASE_URL}
 							/>
 						</AdminSettingField>
 						<AdminSettingField
-							label={$i18n.t('API Token')}
-							description={$i18n.t('API token sent to PaddleOCR-vl.')}
+							label={$i18n.t('settings.admin.documents.apiToken.label')}
+							description={$i18n.t('settings.admin.documents.apiToken.description')}
 						>
 							<SensitiveInput
 								variant="settings"
@@ -801,10 +1034,12 @@
 					</div>
 				{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'mineru'}
 					<AdminSettingRow
-						label={$i18n.t('API Mode')}
-						description={$i18n.t('Choose the local or cloud MinerU API mode.')}
+						label={$i18n.t('settings.admin.documents.apiMode.label')}
+						description={$i18n.t('settings.admin.documents.apiMode.description')}
+						let:labelId
 					>
 						<SettingsSelect
+							id={`${labelId}-control`}
 							bind:value={RAGConfig.MINERU_API_MODE}
 							on:change={() => {
 								const cloudUrl = 'https://mineru.net/api/v4';
@@ -827,10 +1062,12 @@
 					</AdminSettingRow>
 
 					<AdminSettingField
-						label={$i18n.t('API URL')}
-						description={$i18n.t('MinerU API endpoint for the selected mode.')}
+						label={$i18n.t('settings.admin.documents.apiUrl.label')}
+						description={$i18n.t('settings.admin.documents.apiUrl.description')}
+						forId="mineru-api-url"
 					>
 						<input
+							id="mineru-api-url"
 							class={inputClass}
 							placeholder={RAGConfig.MINERU_API_MODE === 'cloud'
 								? $i18n.t('https://mineru.net/api/v4')
@@ -840,21 +1077,24 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('API Key')}
-						description={$i18n.t('API key used for MinerU cloud mode.')}
+						label={$i18n.t('settings.admin.documents.mineruApiKey.label')}
+						description={$i18n.t('settings.admin.documents.mineruApiKey.description')}
 					>
 						<SensitiveInput
 							variant="settings"
 							placeholder={$i18n.t('Enter MinerU API Key')}
+							required={false}
 							bind:value={RAGConfig.MINERU_API_KEY}
 						/>
 					</AdminSettingField>
 
 					<AdminSettingRow
-						label={$i18n.t('API Timeout')}
-						description={$i18n.t('Maximum time in seconds to wait for MinerU API responses.')}
+						label={$i18n.t('settings.admin.documents.apiTimeout.label')}
+						description={$i18n.t('settings.admin.documents.apiTimeout.description')}
+						let:labelId
 					>
 						<input
+							id={`${labelId}-control`}
 							class="w-16 rounded-lg border border-gray-100/50 bg-gray-50/40 px-2 text-right text-xs text-gray-700 outline-hidden transition-colors focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-gray-300 dark:focus:border-blue-500"
 							type="number"
 							min="1"
@@ -864,22 +1104,27 @@
 					</AdminSettingRow>
 
 					<AdminSettingField
-						label={$i18n.t('Parameters')}
-						description={$i18n.t('Advanced MinerU parsing parameters in JSON format.')}
+						label={$i18n.t('settings.admin.documents.mineruParams.label')}
+						description={$i18n.t('settings.admin.documents.mineruParams.description')}
+						forId="mineru-params"
 					>
 						<Textarea
+							id="mineru-params"
 							className={textareaClass}
 							bind:value={RAGConfig.MINERU_PARAMS}
+							maxSize={200}
 							placeholder={`{\n  "enable_ocr": false,\n  "enable_formula": true,\n  "enable_table": true,\n  "language": "en",\n  "model_version": "pipeline",\n  "page_ranges": ""\n}`}
 							minSize={100}
 						/>
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('File Extensions')}
-						description={$i18n.t('Comma-separated extensions MinerU should handle.')}
+						label={$i18n.t('settings.admin.documents.fileExtensions.label')}
+						description={$i18n.t('settings.admin.documents.fileExtensions.description')}
+						forId="mineru-file-extensions"
 					>
 						<input
+							id="mineru-file-extensions"
 							class={inputClass}
 							placeholder={$i18n.t('pdf, docx, pptx, xlsx')}
 							bind:value={RAGConfig.MINERU_FILE_EXTENSIONS}
@@ -887,10 +1132,13 @@
 					</AdminSettingField>
 				{/if}
 
+				<!-- Retired retrieval hint: keep its translation.
+				{$i18n.t('Use segmented retrieval for focused context.')}
+				-->
 				<AdminSettingRow
-					label={$i18n.t('Bypass Embedding and Retrieval')}
+					label={$i18n.t('settings.admin.documents.bypassEmbeddingAndRetrieval.label')}
 					description={RAGConfig.BYPASS_EMBEDDING_AND_RETRIEVAL
-						? $i18n.t('Inject the entire content as context for comprehensive processing.')
+						? $i18n.t('settings.admin.documents.bypassEmbeddingAndRetrieval.description')
 						: $i18n.t('Use segmented retrieval for focused and relevant context.')}
 					let:labelId
 				>
@@ -902,13 +1150,14 @@
 
 				{#if !RAGConfig.BYPASS_EMBEDDING_AND_RETRIEVAL}
 					<AdminSettingRow
-						label={$i18n.t('Text Splitter')}
-						description={$i18n.t('Choose how extracted text is split before indexing.')}
+						label={$i18n.t('settings.admin.documents.textSplitter.label')}
+						description={$i18n.t('settings.admin.documents.textSplitter.description')}
+						let:labelId
 					>
-						<SettingsSelect bind:value={RAGConfig.TEXT_SPLITTER}>
+						<SettingsSelect id={`${labelId}-control`} bind:value={RAGConfig.TEXT_SPLITTER}>
 							<option value="">{$i18n.t('Default')} ({$i18n.t('Character')})</option>
 							<option value="token">{$i18n.t('Token')} ({$i18n.t('Tiktoken')})</option>
-							<option value="token_transformers">
+							<option value="token_transformers" disabled={$config?.features?.slim === true}>
 								{$i18n.t('Token')} ({$i18n.t('Transformers')})
 							</option>
 						</SettingsSelect>
@@ -916,10 +1165,12 @@
 
 					{#if RAGConfig.TEXT_SPLITTER === 'token_transformers'}
 						<AdminSettingField
-							label={$i18n.t('Tokenizer Model')}
-							description={$i18n.t('Tokenizer model used for transformer token splitting.')}
+							label={$i18n.t('settings.admin.documents.tokenizerModel.label')}
+							description={$i18n.t('settings.admin.documents.tokenizerModel.description')}
+							forId="tokenizer-model"
 						>
 							<input
+								id="tokenizer-model"
 								class={inputClass}
 								placeholder={$i18n.t('Enter Tokenizer Model')}
 								bind:value={RAGConfig.RAG_TOKENIZER_MODEL}
@@ -930,10 +1181,8 @@
 					{/if}
 
 					<AdminSettingRow
-						label={$i18n.t('Markdown Header Text Splitter')}
-						description={$i18n.t(
-							'Split documents by markdown headers before character or token splitting.'
-						)}
+						label={$i18n.t('settings.admin.documents.markdownHeaderTextSplitter.label')}
+						description={$i18n.t('settings.admin.documents.markdownHeaderTextSplitter.description')}
 						let:labelId
 					>
 						<Switch
@@ -944,10 +1193,12 @@
 
 					<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 						<AdminSettingField
-							label={$i18n.t('Chunk Size')}
-							description={$i18n.t('Maximum size for each text chunk.')}
+							label={$i18n.t('settings.admin.documents.chunkSize.label')}
+							description={$i18n.t('settings.admin.documents.chunkSize.description')}
+							forId="chunk-size"
 						>
 							<input
+								id="chunk-size"
 								class={inputClass}
 								type="number"
 								placeholder={$i18n.t('Enter Chunk Size')}
@@ -957,10 +1208,12 @@
 							/>
 						</AdminSettingField>
 						<AdminSettingField
-							label={$i18n.t('Chunk Overlap')}
-							description={$i18n.t('Overlap preserved between neighboring chunks.')}
+							label={$i18n.t('settings.admin.documents.chunkOverlap.label')}
+							description={$i18n.t('settings.admin.documents.chunkOverlap.description')}
+							forId="chunk-overlap"
 						>
 							<input
+								id="chunk-overlap"
 								class={inputClass}
 								type="number"
 								placeholder={$i18n.t('Enter Chunk Overlap')}
@@ -973,12 +1226,12 @@
 
 					{#if RAGConfig.ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER}
 						<AdminSettingField
-							label={$i18n.t('Chunk Min Size Target')}
-							description={$i18n.t(
-								'Merge chunks smaller than this threshold when possible. Set to 0 to disable merging.'
-							)}
+							label={$i18n.t('settings.admin.documents.chunkMinSizeTarget.label')}
+							description={$i18n.t('settings.admin.documents.chunkMinSizeTarget.description')}
+							forId="chunk-min-size-target"
 						>
 							<input
+								id="chunk-min-size-target"
 								class={inputClass}
 								type="number"
 								placeholder={$i18n.t('Enter Chunk Min Size Target')}
@@ -992,12 +1245,14 @@
 			</AdminSettingSection>
 
 			{#if !RAGConfig.BYPASS_EMBEDDING_AND_RETRIEVAL}
-				<AdminSettingSection title={$i18n.t('Embedding')}>
+				<AdminSettingSection title={$i18n.t('settings.admin.documents.sections.embedding.title')}>
 					<AdminSettingRow
-						label={$i18n.t('Embedding Model Engine')}
-						description={$i18n.t('Provider used to generate document embeddings.')}
+						label={$i18n.t('settings.admin.documents.embeddingModelEngine.label')}
+						description={$i18n.t('settings.admin.documents.embeddingModelEngine.description')}
+						let:labelId
 					>
 						<SettingsSelect
+							id={`${labelId}-control`}
 							bind:value={RAG_EMBEDDING_ENGINE}
 							placeholder={$i18n.t('Select an embedding model engine')}
 							on:change={(e) => {
@@ -1012,7 +1267,9 @@
 								}
 							}}
 						>
-							<option value="">{$i18n.t('Default (SentenceTransformers)')}</option>
+							<option value="" disabled={$config?.features?.slim === true}
+								>{$i18n.t('Default (SentenceTransformers)')}</option
+							>
 							<option value="ollama">{$i18n.t('Ollama')}</option>
 							<option value="openai">{$i18n.t('OpenAI')}</option>
 							<option value="azure_openai">{$i18n.t('Azure OpenAI')}</option>
@@ -1022,23 +1279,25 @@
 					{#if RAG_EMBEDDING_ENGINE === 'openai'}
 						<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 							<AdminSettingField
-								label={$i18n.t('API Base URL')}
-								description={$i18n.t('OpenAI-compatible embeddings endpoint.')}
+								label={$i18n.t('settings.admin.documents.openaiurl.label')}
+								description={$i18n.t('settings.admin.documents.openaiurl.description')}
+								forId="embedding-openai-url"
 							>
 								<input
+									id="embedding-openai-url"
 									class={inputClass}
-									placeholder={$i18n.t('API Base URL')}
+									placeholder={$i18n.t('settings.admin.documents.openaiurl.label')}
 									bind:value={OpenAIUrl}
 									required
 								/>
 							</AdminSettingField>
 							<AdminSettingField
-								label={$i18n.t('API Key')}
-								description={$i18n.t('API key for embedding requests.')}
+								label={$i18n.t('settings.admin.documents.openaikey.label')}
+								description={$i18n.t('settings.admin.documents.openaikey.description')}
 							>
 								<SensitiveInput
 									variant="settings"
-									placeholder={$i18n.t('API Key')}
+									placeholder={$i18n.t('settings.admin.documents.openaikey.label')}
 									bind:value={OpenAIKey}
 									required={false}
 								/>
@@ -1047,23 +1306,25 @@
 					{:else if RAG_EMBEDDING_ENGINE === 'ollama'}
 						<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 							<AdminSettingField
-								label={$i18n.t('API Base URL')}
-								description={$i18n.t('Ollama endpoint used for embeddings.')}
+								label={$i18n.t('settings.admin.documents.ollamaurl.label')}
+								description={$i18n.t('settings.admin.documents.ollamaurl.description')}
+								forId="embedding-ollama-url"
 							>
 								<input
+									id="embedding-ollama-url"
 									class={inputClass}
-									placeholder={$i18n.t('API Base URL')}
+									placeholder={$i18n.t('settings.admin.documents.ollamaurl.label')}
 									bind:value={OllamaUrl}
 									required
 								/>
 							</AdminSettingField>
 							<AdminSettingField
-								label={$i18n.t('API Key')}
-								description={$i18n.t('Optional API key for Ollama requests.')}
+								label={$i18n.t('settings.admin.documents.ollamakey.label')}
+								description={$i18n.t('settings.admin.documents.ollamakey.description')}
 							>
 								<SensitiveInput
 									variant="settings"
-									placeholder={$i18n.t('API Key')}
+									placeholder={$i18n.t('settings.admin.documents.ollamakey.label')}
 									bind:value={OllamaKey}
 									required={false}
 								/>
@@ -1072,33 +1333,37 @@
 					{:else if RAG_EMBEDDING_ENGINE === 'azure_openai'}
 						<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 							<AdminSettingField
-								label={$i18n.t('API Base URL')}
-								description={$i18n.t('Azure OpenAI endpoint used for embeddings.')}
+								label={$i18n.t('settings.admin.documents.azureopenaiurl.label')}
+								description={$i18n.t('settings.admin.documents.azureopenaiurl.description')}
+								forId="embedding-azure-openai-url"
 							>
 								<input
+									id="embedding-azure-openai-url"
 									class={inputClass}
-									placeholder={$i18n.t('API Base URL')}
+									placeholder={$i18n.t('settings.admin.documents.azureopenaiurl.label')}
 									bind:value={AzureOpenAIUrl}
 									required
 								/>
 							</AdminSettingField>
 							<AdminSettingField
-								label={$i18n.t('API Key')}
-								description={$i18n.t('Azure OpenAI API key.')}
+								label={$i18n.t('settings.admin.documents.azureopenaikey.label')}
+								description={$i18n.t('settings.admin.documents.azureopenaikey.description')}
 							>
 								<SensitiveInput
 									variant="settings"
-									placeholder={$i18n.t('API Key')}
+									placeholder={$i18n.t('settings.admin.documents.azureopenaikey.label')}
 									bind:value={AzureOpenAIKey}
 								/>
 							</AdminSettingField>
 							<AdminSettingField
-								label={$i18n.t('Version')}
-								description={$i18n.t('Azure OpenAI API version.')}
+								label={$i18n.t('settings.admin.documents.version.label')}
+								description={$i18n.t('settings.admin.documents.version.description')}
+								forId="embedding-azure-openai-version"
 							>
 								<input
+									id="embedding-azure-openai-version"
 									class={inputClass}
-									placeholder={$i18n.t('Version')}
+									placeholder={$i18n.t('settings.admin.documents.version.label')}
 									bind:value={AzureOpenAIVersion}
 									required
 								/>
@@ -1107,13 +1372,13 @@
 					{/if}
 
 					<AdminSettingField
-						label={$i18n.t('Embedding Model')}
-						description={$i18n.t(
-							'Model used to generate embeddings. Reindex knowledge after changing this.'
-						)}
+						label={$i18n.t('settings.admin.documents.embeddingModel.label')}
+						description={$i18n.t('settings.admin.documents.embeddingModel.description')}
+						forId="embedding-model"
 					>
 						<div class="flex w-full gap-2">
 							<input
+								id="embedding-model"
 								class={inputClass}
 								placeholder={RAG_EMBEDDING_ENGINE === 'ollama'
 									? $i18n.t('Set embedding model')
@@ -1131,8 +1396,8 @@
 									on:click={() => {
 										embeddingModelUpdateHandler();
 									}}
-									disabled={updateEmbeddingModelLoading}
-									aria-label={$i18n.t('Update embedding model')}
+									aria-disabled={updateEmbeddingModelLoading}
+									aria-label={$i18n.t('settings.admin.documents.updateEmbeddingModel.label')}
 								>
 									{#if updateEmbeddingModelLoading}
 										<Spinner />
@@ -1162,10 +1427,12 @@
 					</AdminSettingField>
 
 					<AdminSettingRow
-						label={$i18n.t('Embedding Batch Size')}
-						description={$i18n.t('Number of items processed per embedding batch.')}
+						label={$i18n.t('settings.admin.documents.embeddingBatchSize.label')}
+						description={$i18n.t('settings.admin.documents.embeddingBatchSize.description')}
+						let:labelId
 					>
 						<input
+							id={`${labelId}-control`}
 							bind:value={RAG_EMBEDDING_BATCH_SIZE}
 							type="number"
 							class="w-14 bg-transparent text-center text-xs outline-none"
@@ -1177,19 +1444,21 @@
 
 					{#if RAG_EMBEDDING_ENGINE === 'ollama' || RAG_EMBEDDING_ENGINE === 'openai' || RAG_EMBEDDING_ENGINE === 'azure_openai'}
 						<AdminSettingRow
-							label={$i18n.t('Async Embedding Processing')}
-							description={$i18n.t('Run embedding tasks concurrently to speed up processing.')}
+							label={$i18n.t('settings.admin.documents.asyncEmbeddingProcessing.label')}
+							description={$i18n.t('settings.admin.documents.asyncEmbeddingProcessing.description')}
 							let:labelId
 						>
 							<Switch bind:state={ENABLE_ASYNC_EMBEDDING} ariaLabelledbyId={labelId} />
 						</AdminSettingRow>
 						<AdminSettingRow
-							label={$i18n.t('Embedding Concurrent Requests')}
+							label={$i18n.t('settings.admin.documents.embeddingConcurrentRequests.label')}
 							description={$i18n.t(
-								'Maximum concurrent embedding requests. Set to 0 for unlimited.'
+								'settings.admin.documents.embeddingConcurrentRequests.description'
 							)}
+							let:labelId
 						>
 							<input
+								id={`${labelId}-control`}
 								bind:value={RAG_EMBEDDING_CONCURRENT_REQUESTS}
 								type="number"
 								class="w-14 bg-transparent text-center text-xs outline-none"
@@ -1198,16 +1467,65 @@
 							/>
 						</AdminSettingRow>
 					{/if}
+
+					<Collapsible
+						title={$i18n.t('Advanced')}
+						bind:open={showEmbeddingAdvanced}
+						buttonClassName="w-full py-1 text-xs text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-colors"
+					>
+						<div slot="content" class="flex flex-col gap-2.5 pt-2.5">
+							<AdminSettingField
+								label={$i18n.t('settings.admin.documents.embeddingQueryPrefix.label')}
+								description={$i18n.t('settings.admin.documents.embeddingQueryPrefix.description')}
+								forId="embedding-query-prefix"
+							>
+								<input
+									id="embedding-query-prefix"
+									class={inputClass}
+									placeholder={$i18n.t('Optional')}
+									bind:value={RAG_EMBEDDING_QUERY_PREFIX}
+								/>
+							</AdminSettingField>
+
+							<AdminSettingField
+								label={$i18n.t('settings.admin.documents.embeddingContentPrefix.label')}
+								description={$i18n.t('settings.admin.documents.embeddingContentPrefix.description')}
+								forId="embedding-content-prefix"
+							>
+								<input
+									id="embedding-content-prefix"
+									class={inputClass}
+									placeholder={$i18n.t('Optional')}
+									bind:value={RAG_EMBEDDING_CONTENT_PREFIX}
+								/>
+							</AdminSettingField>
+						</div>
+					</Collapsible>
 				</AdminSettingSection>
 			{/if}
 
-			<AdminSettingSection title={$i18n.t('Retrieval')}>
+			<AdminSettingSection title={$i18n.t('settings.admin.documents.sections.retrieval.title')}>
 				{#if !RAGConfig.BYPASS_EMBEDDING_AND_RETRIEVAL}
+					<AdminSettingField
+						label={$i18n.t('settings.admin.documents.fullTextCharThreshold.label')}
+						description={$i18n.t('settings.admin.documents.fullTextCharThreshold.description')}
+						forId="full-text-char-threshold"
+					>
+						<input
+							id="full-text-char-threshold"
+							class={inputClass}
+							type="number"
+							bind:value={RAGConfig.RAG_FULL_TEXT_CHAR_THRESHOLD}
+							disabled={RAGConfig.RAG_FULL_CONTEXT}
+							min="0"
+							step="1"
+							required
+						/>
+					</AdminSettingField>
+
 					<AdminSettingRow
-						label={$i18n.t('Full Context Mode')}
-						description={RAGConfig.RAG_FULL_CONTEXT
-							? $i18n.t('Inject entire documents as context for comprehensive processing.')
-							: $i18n.t('Use segmented retrieval for focused context.')}
+						label={$i18n.t('settings.admin.documents.fullContextMode.label')}
+						description={$i18n.t('settings.admin.documents.fullContextMode.description')}
 						let:labelId
 					>
 						<Switch bind:state={RAGConfig.RAG_FULL_CONTEXT} ariaLabelledbyId={labelId} />
@@ -1215,8 +1533,8 @@
 
 					{#if !RAGConfig.RAG_FULL_CONTEXT}
 						<AdminSettingRow
-							label={$i18n.t('Hybrid Search')}
-							description={$i18n.t('Combine semantic and keyword retrieval.')}
+							label={$i18n.t('settings.admin.documents.hybridSearch.label')}
+							description={$i18n.t('settings.admin.documents.hybridSearch.description')}
 							let:labelId
 						>
 							<Switch bind:state={RAGConfig.ENABLE_RAG_HYBRID_SEARCH} ariaLabelledbyId={labelId} />
@@ -1224,10 +1542,8 @@
 
 						{#if RAGConfig.ENABLE_RAG_HYBRID_SEARCH === true}
 							<AdminSettingRow
-								label={$i18n.t('Enrich Hybrid Search Text')}
-								description={$i18n.t(
-									'Add filenames, titles, sections, and snippets to improve lexical recall.'
-								)}
+								label={$i18n.t('settings.admin.documents.enrichHybridSearchText.label')}
+								description={$i18n.t('settings.admin.documents.enrichHybridSearchText.description')}
 								let:labelId
 							>
 								<Switch
@@ -1237,10 +1553,12 @@
 							</AdminSettingRow>
 
 							<AdminSettingRow
-								label={$i18n.t('Reranking Engine')}
-								description={$i18n.t('Provider used to rerank hybrid search results.')}
+								label={$i18n.t('settings.admin.documents.rerankingEngine.label')}
+								description={$i18n.t('settings.admin.documents.rerankingEngine.description')}
+								let:labelId
 							>
 								<SettingsSelect
+									id={`${labelId}-control`}
 									bind:value={RAGConfig.RAG_RERANKING_ENGINE}
 									placeholder={$i18n.t('Select a reranking model engine')}
 									on:change={(e) => {
@@ -1251,7 +1569,9 @@
 										}
 									}}
 								>
-									<option value="">{$i18n.t('Default (SentenceTransformers)')}</option>
+									<option value="" disabled={$config?.features?.slim === true}
+										>{$i18n.t('Default (SentenceTransformers)')}</option
+									>
 									<option value="external">{$i18n.t('External')}</option>
 								</SettingsSelect>
 							</AdminSettingRow>
@@ -1259,23 +1579,31 @@
 							{#if RAGConfig.RAG_RERANKING_ENGINE === 'external'}
 								<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 									<AdminSettingField
-										label={$i18n.t('API Base URL')}
-										description={$i18n.t('External reranker endpoint.')}
+										label={$i18n.t('settings.admin.documents.ragExternalRerankerUrl.label')}
+										description={$i18n.t(
+											'settings.admin.documents.ragExternalRerankerUrl.description'
+										)}
+										forId="external-reranker-url"
 									>
 										<input
+											id="external-reranker-url"
 											class={inputClass}
-											placeholder={$i18n.t('API Base URL')}
+											placeholder={$i18n.t('settings.admin.documents.ragExternalRerankerUrl.label')}
 											bind:value={RAGConfig.RAG_EXTERNAL_RERANKER_URL}
 											required
 										/>
 									</AdminSettingField>
 									<AdminSettingField
-										label={$i18n.t('API Key')}
-										description={$i18n.t('API key sent to the external reranker.')}
+										label={$i18n.t('settings.admin.documents.ragExternalRerankerApiKey.label')}
+										description={$i18n.t(
+											'settings.admin.documents.ragExternalRerankerApiKey.description'
+										)}
 									>
 										<SensitiveInput
 											variant="settings"
-											placeholder={$i18n.t('API Key')}
+											placeholder={$i18n.t(
+												'settings.admin.documents.ragExternalRerankerApiKey.label'
+											)}
 											bind:value={RAGConfig.RAG_EXTERNAL_RERANKER_API_KEY}
 											required={false}
 										/>
@@ -1284,10 +1612,12 @@
 							{/if}
 
 							<AdminSettingField
-								label={$i18n.t('Reranking Model')}
-								description={$i18n.t('Model used to rerank retrieved results.')}
+								label={$i18n.t('settings.admin.documents.rerankingModel.label')}
+								description={$i18n.t('settings.admin.documents.rerankingModel.description')}
+								forId="reranking-model"
 							>
 								<input
+									id="reranking-model"
 									class={inputClass}
 									placeholder={$i18n.t('Set reranking model (e.g. {{model}})', {
 										model: 'BAAI/bge-reranker-v2-m3'
@@ -1298,10 +1628,12 @@
 						{/if}
 
 						<AdminSettingRow
-							label={$i18n.t('Reranking Batch Size')}
-							description={$i18n.t('Number of results processed per reranking batch.')}
+							label={$i18n.t('settings.admin.documents.rerankingBatchSize.label')}
+							description={$i18n.t('settings.admin.documents.rerankingBatchSize.description')}
+							let:labelId
 						>
 							<input
+								id={`${labelId}-control`}
 								bind:value={RAGConfig.RAG_RERANKING_BATCH_SIZE}
 								type="number"
 								class="w-14 bg-transparent text-center text-xs outline-none"
@@ -1312,10 +1644,12 @@
 						</AdminSettingRow>
 
 						<AdminSettingField
-							label={$i18n.t('Top K')}
-							description={$i18n.t('Maximum number of retrieved chunks returned to the model.')}
+							label={$i18n.t('settings.admin.documents.topK.label')}
+							description={$i18n.t('settings.admin.documents.topK.description')}
+							forId="top-k"
 						>
 							<input
+								id="top-k"
 								class={inputClass}
 								type="number"
 								placeholder={$i18n.t('Enter Top K')}
@@ -1327,10 +1661,12 @@
 
 						{#if RAGConfig.ENABLE_RAG_HYBRID_SEARCH === true}
 							<AdminSettingField
-								label={$i18n.t('Top K Reranker')}
-								description={$i18n.t('Maximum number of hybrid results sent to the reranker.')}
+								label={$i18n.t('settings.admin.documents.topKReranker.label')}
+								description={$i18n.t('settings.admin.documents.topKReranker.description')}
+								forId="top-k-reranker"
 							>
 								<input
+									id="top-k-reranker"
 									class={inputClass}
 									type="number"
 									placeholder={$i18n.t('Enter Top K Reranker')}
@@ -1341,28 +1677,28 @@
 							</AdminSettingField>
 
 							<AdminSettingField
-								label={$i18n.t('Relevance Threshold')}
-								description={$i18n.t(
-									'Only return documents with a score greater than or equal to this value.'
-								)}
+								label={$i18n.t('settings.admin.documents.relevanceThreshold.label')}
+								description={$i18n.t('settings.admin.documents.relevanceThreshold.description')}
+								forId="relevance-threshold"
 							>
 								<input
+									id="relevance-threshold"
 									class={inputClass}
 									type="number"
 									step="0.01"
 									placeholder={$i18n.t('Enter Score')}
 									bind:value={RAGConfig.RELEVANCE_THRESHOLD}
 									autocomplete="off"
-									min="0.0"
-									title={$i18n.t('The score should be a value between 0.0 (0%) and 1.0 (100%).')}
 								/>
 							</AdminSettingField>
 
 							<AdminSettingRow
-								label={$i18n.t('BM25 Weight')}
-								description={$i18n.t('Balance semantic and lexical weighting for hybrid search.')}
+								let:labelId
+								label={$i18n.t('settings.admin.documents.bm25Weight.label')}
+								description={$i18n.t('settings.admin.documents.bm25Weight.description')}
 							>
 								<button
+									id={`${labelId}-control`}
 									class={actionButtonClass}
 									type="button"
 									on:click={() => {
@@ -1381,6 +1717,7 @@
 									<div class="flex-1">
 										<input
 											id="steps-range"
+											aria-label={$i18n.t('settings.admin.documents.bm25Weight.label')}
 											type="range"
 											min="0"
 											max="1"
@@ -1397,6 +1734,7 @@
 									</div>
 									<input
 										bind:value={RAGConfig.HYBRID_BM25_WEIGHT}
+										aria-label={$i18n.t('settings.admin.documents.bm25Weight.label')}
 										type="number"
 										class="w-14 bg-transparent text-center text-xs outline-none"
 										min="0"
@@ -1410,8 +1748,9 @@
 				{/if}
 
 				<AdminSettingField
-					label={$i18n.t('RAG Template')}
-					description={$i18n.t('Prompt template used when retrieved context is injected.')}
+					label={$i18n.t('settings.admin.documents.ragTemplate.label')}
+					description={$i18n.t('settings.admin.documents.ragTemplate.description')}
+					forId="rag-template"
 				>
 					<Tooltip
 						content={$i18n.t('Leave empty to use the default prompt, or enter a custom prompt')}
@@ -1419,8 +1758,10 @@
 						className="w-full"
 					>
 						<Textarea
+							id="rag-template"
 							className={textareaClass}
 							bind:value={RAGConfig.RAG_TEMPLATE}
+							maxSize={300}
 							placeholder={$i18n.t(
 								'Leave empty to use the default prompt, or enter a custom prompt'
 							)}
@@ -1437,14 +1778,14 @@
 				</AdminSettingField>
 			</AdminSettingSection>
 
-			<AdminSettingSection title={$i18n.t('Files')}>
+			<AdminSettingSection title={$i18n.t('settings.admin.documents.sections.files.title')}>
 				<AdminSettingField
-					label={$i18n.t('Allowed File Extensions')}
-					description={$i18n.t(
-						'Comma-separated upload extensions. Leave empty for all file types.'
-					)}
+					label={$i18n.t('settings.admin.documents.allowedFileExtensions.label')}
+					description={$i18n.t('settings.admin.documents.allowedFileExtensions.description')}
+					forId="allowed-file-extensions"
 				>
 					<input
+						id="allowed-file-extensions"
 						class={inputClass}
 						type="text"
 						placeholder={$i18n.t('e.g. pdf, docx, txt')}
@@ -1455,10 +1796,12 @@
 
 				<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 					<AdminSettingField
-						label={$i18n.t('Max Upload Size')}
-						description={$i18n.t('Maximum file size in MB. Leave empty for unlimited.')}
+						label={$i18n.t('settings.admin.documents.maxUploadSize.label')}
+						description={$i18n.t('settings.admin.documents.maxUploadSize.description')}
+						forId="max-upload-size"
 					>
 						<input
+							id="max-upload-size"
 							class={inputClass}
 							type="number"
 							placeholder={$i18n.t('Leave empty for unlimited')}
@@ -1468,10 +1811,12 @@
 						/>
 					</AdminSettingField>
 					<AdminSettingField
-						label={$i18n.t('Max Upload Count')}
-						description={$i18n.t('Maximum number of files that can be used at once in chat.')}
+						label={$i18n.t('settings.admin.documents.maxUploadCount.label')}
+						description={$i18n.t('settings.admin.documents.maxUploadCount.description')}
+						forId="max-upload-count"
 					>
 						<input
+							id="max-upload-count"
 							class={inputClass}
 							type="number"
 							placeholder={$i18n.t('Leave empty for unlimited')}
@@ -1482,14 +1827,66 @@
 					</AdminSettingField>
 				</div>
 
+				<AdminSettingField
+					label={$i18n.t('settings.admin.documents.knowledgeMaxUploadCount.label')}
+					description={$i18n.t('settings.admin.documents.knowledgeMaxUploadCount.description')}
+					forId="knowledge-max-upload-count"
+				>
+					<input
+						id="knowledge-max-upload-count"
+						class={inputClass}
+						type="number"
+						placeholder={$i18n.t('Leave empty for unlimited')}
+						bind:value={RAGConfig.KNOWLEDGE_MAX_UPLOAD_COUNT}
+						autocomplete="off"
+						min="1"
+						step="1"
+					/>
+				</AdminSettingField>
+
 				<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 					<AdminSettingField
-						label={$i18n.t('Image Compression Width')}
-						description={$i18n.t(
-							'Width in pixels to compress images to. Leave empty for no compression.'
-						)}
+						label={$i18n.t('settings.admin.documents.knowledgeMaxSize.label')}
+						description={$i18n.t('settings.admin.documents.knowledgeMaxSize.description')}
+						forId="knowledge-max-upload-file-size"
 					>
 						<input
+							id="knowledge-max-upload-file-size"
+							class={inputClass}
+							type="number"
+							placeholder={$i18n.t('Leave empty for unlimited')}
+							bind:value={RAGConfig.KNOWLEDGE_MAX_FILE_SIZE}
+							autocomplete="off"
+							min="1"
+							step="1"
+						/>
+					</AdminSettingField>
+					<AdminSettingField
+						label={$i18n.t('settings.admin.documents.knowledgeMaxCount.label')}
+						description={$i18n.t('settings.admin.documents.knowledgeMaxCount.description')}
+						forId="knowledge-max-upload-file-count"
+					>
+						<input
+							id="knowledge-max-upload-file-count"
+							class={inputClass}
+							type="number"
+							placeholder={$i18n.t('Leave empty for unlimited')}
+							bind:value={RAGConfig.KNOWLEDGE_MAX_FILE_COUNT}
+							autocomplete="off"
+							min="1"
+							step="1"
+						/>
+					</AdminSettingField>
+				</div>
+
+				<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
+					<AdminSettingField
+						label={$i18n.t('settings.admin.documents.imageCompressionWidth.label')}
+						description={$i18n.t('settings.admin.documents.imageCompressionWidth.description')}
+						forId="image-compression-width"
+					>
+						<input
+							id="image-compression-width"
 							class={inputClass}
 							type="number"
 							placeholder={$i18n.t('Leave empty for no compression')}
@@ -1499,12 +1896,12 @@
 						/>
 					</AdminSettingField>
 					<AdminSettingField
-						label={$i18n.t('Image Compression Height')}
-						description={$i18n.t(
-							'Height in pixels to compress images to. Leave empty for no compression.'
-						)}
+						label={$i18n.t('settings.admin.documents.imageCompressionHeight.label')}
+						description={$i18n.t('settings.admin.documents.imageCompressionHeight.description')}
+						forId="image-compression-height"
 					>
 						<input
+							id="image-compression-height"
 							class={inputClass}
 							type="number"
 							placeholder={$i18n.t('Leave empty for no compression')}
@@ -1516,10 +1913,10 @@
 				</div>
 			</AdminSettingSection>
 
-			<AdminSettingSection title={$i18n.t('Integration')}>
+			<AdminSettingSection title={$i18n.t('settings.admin.documents.sections.integration.title')}>
 				<AdminSettingRow
-					label={$i18n.t('Google Drive')}
-					description={$i18n.t('Allow Google Drive as a document source.')}
+					label={$i18n.t('settings.admin.documents.googleDrive.label')}
+					description={$i18n.t('settings.admin.documents.googleDrive.description')}
 					let:labelId
 				>
 					<Switch
@@ -1528,20 +1925,22 @@
 					/>
 				</AdminSettingRow>
 				<AdminSettingRow
-					label={$i18n.t('OneDrive')}
-					description={$i18n.t('Allow OneDrive as a document source.')}
+					label={$i18n.t('settings.admin.documents.onedrive.label')}
+					description={$i18n.t('settings.admin.documents.onedrive.description')}
 					let:labelId
 				>
 					<Switch bind:state={RAGConfig.ENABLE_ONEDRIVE_INTEGRATION} ariaLabelledbyId={labelId} />
 				</AdminSettingRow>
 			</AdminSettingSection>
 
-			<AdminSettingSection title={$i18n.t('Danger Zone')}>
+			<AdminSettingSection title={$i18n.t('settings.admin.documents.sections.dangerZone.title')}>
 				<AdminSettingRow
-					label={$i18n.t('Reset Upload Directory')}
-					description={$i18n.t('Delete uploaded files from the upload directory.')}
+					let:labelId
+					label={$i18n.t('settings.admin.documents.resetUploadDirectory.label')}
+					description={$i18n.t('settings.admin.documents.resetUploadDirectory.description')}
 				>
 					<button
+						id={`${labelId}-control`}
 						class={actionButtonClass}
 						type="button"
 						on:click={() => {
@@ -1552,10 +1951,12 @@
 					</button>
 				</AdminSettingRow>
 				<AdminSettingRow
-					label={$i18n.t('Reset Vector Storage/Knowledge')}
-					description={$i18n.t('Clear vector storage and knowledge indexing data.')}
+					let:labelId
+					label={$i18n.t('settings.admin.documents.resetVectorStorageKnowledge.label')}
+					description={$i18n.t('settings.admin.documents.resetVectorStorageKnowledge.description')}
 				>
 					<button
+						id={`${labelId}-control`}
 						class={actionButtonClass}
 						type="button"
 						on:click={() => {
@@ -1566,31 +1967,28 @@
 					</button>
 				</AdminSettingRow>
 				<AdminSettingRow
-					label={$i18n.t('Reindex Knowledge and Memory Vectors')}
+					let:labelId
+					label={$i18n.t('settings.admin.documents.reindexKnowledgeAndMemoryVectors.label')}
 					description={$i18n.t(
-						'Rebuild vectors for existing knowledge files, knowledge search, and memories.'
+						'settings.admin.documents.reindexKnowledgeAndMemoryVectors.description'
 					)}
 				>
 					<button
+						id={`${labelId}-control`}
 						class={actionButtonClass}
 						type="button"
 						on:click={() => {
 							showReindexConfirm = true;
 						}}
 					>
-						{$i18n.t('Reindex')}
+						{$i18n.t('settings.admin.documents.reindex.label')}
 					</button>
 				</AdminSettingRow>
 			</AdminSettingSection>
 		</div>
 
 		<div class="flex justify-end pt-6 text-sm font-normal">
-			<button
-				class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
-				type="submit"
-			>
-				{$i18n.t('Save')}
-			</button>
+			<AdminSettingSaveButton {settings} {savedConfig} labels={settingLabels} {sensitiveKeys} />
 		</div>
 	{:else}
 		<div class="flex items-center justify-center h-full">

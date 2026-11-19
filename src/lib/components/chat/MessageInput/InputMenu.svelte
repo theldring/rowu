@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { getContext, onMount, tick } from 'svelte';
+	import { getContext, onMount } from 'svelte';
 	import { fly } from 'svelte/transition';
 
-	import { config, user, tools as _tools, mobile, knowledge } from '$lib/stores';
+	import { config, user, tools as _tools, mobile, knowledge, visibleControls } from '$lib/stores';
 	import { getKnowledgeBases } from '$lib/apis/knowledge';
 
 	import { createPicker } from '$lib/utils/google-drive-picker';
@@ -11,6 +11,7 @@
 	import DropdownMenu from '$lib/components/common/DropdownMenu.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import DocumentArrowUp from '$lib/components/icons/DocumentArrowUp.svelte';
+	import DocumentDuplicate from '$lib/components/icons/DocumentDuplicate.svelte';
 	import Camera from '$lib/components/icons/Camera.svelte';
 	import Note from '$lib/components/icons/Note.svelte';
 	import Clip from '$lib/components/icons/Clip.svelte';
@@ -28,12 +29,14 @@
 	import AttachWebpageModal from './AttachWebpageModal.svelte';
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
+	export let chatId: string = '';
 	export let files = [];
 
 	export let selectedModels: string[] = [];
 	export let fileUploadCapableModels: string[] = [];
+	export let visionCapableModels: string[] = [];
 
 	export let screenCaptureHandler: Function;
 	export let uploadFilesHandler: Function;
@@ -47,21 +50,57 @@
 	export let toolApprovalMode = 'full';
 	export let onToolApprovalModeChange: Function = () => {};
 
-	let show = false;
-	let tab = '';
+	export let show = false;
+	export let tab = '';
+	export let closeOnOutsideClick = true;
+	$: if (!show) tab = '';
+	$: hasInternalList = [
+		'tools',
+		'skills',
+		'image',
+		'video',
+		'files',
+		'notes',
+		'knowledge',
+		'chats',
+		'terminal',
+		'directory'
+	].includes(tab);
 
 	let showAttachWebpageModal = false;
-	const toolApprovalModes = [
+	$: showAddContext =
+		$visibleControls['chat.attach_webpage'] ||
+		$visibleControls['chat.attach_files'] ||
+		(($config?.features?.enable_notes ?? false) &&
+			($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true)) &&
+			$visibleControls['chat.attach_notes']) ||
+		$visibleControls['chat.attach_knowledge'] ||
+		$visibleControls['chat.reference_chats'] ||
+		(fileUploadEnabled &&
+			($config?.features?.enable_google_drive_integration ||
+				($config?.features?.enable_onedrive_integration &&
+					($config?.features?.enable_onedrive_personal ||
+						$config?.features?.enable_onedrive_business))));
+	$: toolApprovalModes = [
 		{
 			value: 'full',
-			label: 'Full access',
-			description: 'Run tools without asking for approval.'
+			label: $i18n.t('Full access'),
+			description: $i18n.t('Run tools without asking for approval.')
 		},
 		{
 			value: 'ask',
-			label: 'Ask for approval',
-			description: 'Stop before each tool call until you allow or deny it.'
-		}
+			label: $i18n.t('Ask for approval'),
+			description: $i18n.t('Stop before each tool call until you allow or deny it.')
+		},
+		...($config?.features?.enable_tool_permissions_auto
+			? [
+					{
+						value: 'auto',
+						label: $i18n.t('Auto'),
+						description: $i18n.t('settings.chat.toolPermissionsAuto.description')
+					}
+				]
+			: [])
 	];
 
 	let fileUploadEnabled = true;
@@ -73,8 +112,8 @@
 	$: webUploadEnabled = $user?.role === 'admin' || ($user?.permissions?.chat?.web_upload ?? true);
 	$: toolPermissionsEnabled = $config?.features?.enable_tool_permissions ?? false;
 
-	$: if (!fileUploadEnabled && files.length > 0) {
-		files = [];
+	$: if (!fileUploadEnabled && files.some((file) => file.type !== 'text')) {
+		files = files.filter((file) => file.type === 'text');
 	}
 
 	const detectMobile = () => {
@@ -125,9 +164,12 @@
 
 <Dropdown
 	bind:show
+	{closeOnOutsideClick}
 	visualViewportAware
-	on:change={(e) => {
-		if (e.detail === false) {
+	maxHeight={hasInternalList ? '18rem' : undefined}
+	contentClass="flex flex-col overflow-hidden!"
+	onOpenChange={(state) => {
+		if (state === false) {
 			onClose();
 		}
 	}}
@@ -136,16 +178,18 @@
 		<slot />
 	</Tooltip>
 
-	<div slot="content">
-		<DropdownMenu className="w-70 max-h-72 overflow-hidden transition">
+	<div slot="content" class="flex min-h-0 flex-col">
+		<DropdownMenu
+			className="w-70 min-h-0 transition {hasInternalList
+				? 'flex flex-col overflow-hidden'
+				: 'overflow-y-auto overflow-x-hidden scrollbar-thin'}"
+		>
 			{#if tab === ''}
-				<div
-					class="max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin"
-					in:fly={{ x: -20, duration: 150 }}
-				>
+				<div in:fly={{ x: -20, duration: 150 }}>
 					{#if toolPermissionsEnabled}
 						<button
-							class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl"
+							role="menuitem"
+							class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left"
 							on:click={() => {
 								tab = 'tool_permissions';
 							}}
@@ -183,7 +227,13 @@
 
 						<div class="h-px mx-1 my-1 bg-gray-100 dark:bg-gray-800"></div>
 					{/if}
+				</div>
+			{/if}
 
+			<slot name="terminal" />
+
+			{#if tab === ''}
+				<div in:fly={{ x: -20, duration: 150 }}>
 					<Tooltip
 						content={fileUploadCapableModels.length !== selectedModels.length
 							? $i18n.t('Model(s) do not support file upload')
@@ -193,7 +243,8 @@
 						className="w-full"
 					>
 						<button
-							class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!fileUploadEnabled
+							role="menuitem"
+							class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left {!fileUploadEnabled
 								? 'opacity-50'
 								: ''}"
 							type="button"
@@ -210,95 +261,7 @@
 						</button>
 					</Tooltip>
 
-					<Tooltip
-						content={fileUploadCapableModels.length !== selectedModels.length
-							? $i18n.t('Model(s) do not support file upload')
-							: !fileUploadEnabled
-								? $i18n.t('You do not have permission to upload files.')
-								: ''}
-						className="w-full"
-					>
-						<button
-							class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!fileUploadEnabled
-								? 'opacity-50'
-								: ''}"
-							type="button"
-							on:click={() => {
-								if (fileUploadEnabled) {
-									if (!detectMobile()) {
-										screenCaptureHandler();
-									} else {
-										const cameraInputElement = document.getElementById('camera-input');
-
-										if (cameraInputElement) {
-											cameraInputElement.click();
-										}
-									}
-									show = false;
-								}
-							}}
-						>
-							<Camera />
-							<div class=" line-clamp-1">{$i18n.t('Capture')}</div>
-						</button>
-					</Tooltip>
-
-					<Tooltip
-						content={!webUploadEnabled
-							? $i18n.t('You do not have permission to upload web content.')
-							: ''}
-						className="w-full"
-					>
-						<button
-							class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!webUploadEnabled
-								? 'opacity-50'
-								: ''}"
-							type="button"
-							on:click={() => {
-								if (webUploadEnabled) {
-									showAttachWebpageModal = true;
-									show = false;
-								}
-							}}
-						>
-							<GlobeAlt />
-							<div class="line-clamp-1">{$i18n.t('Attach Webpage')}</div>
-						</button>
-					</Tooltip>
-
-					<Tooltip
-						content={fileUploadCapableModels.length !== selectedModels.length
-							? $i18n.t('Model(s) do not support file upload')
-							: !fileUploadEnabled
-								? $i18n.t('You do not have permission to upload files.')
-								: ''}
-						className="w-full"
-					>
-						<button
-							class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!fileUploadEnabled
-								? 'opacity-50'
-								: ''}"
-							on:click={() => {
-								if (fileUploadEnabled) {
-									tab = 'files';
-								}
-							}}
-						>
-							<DocumentArrowUp />
-
-							<div class="flex items-center w-full justify-between">
-								<div class="line-clamp-1">
-									{$i18n.t('Attach Files')}
-								</div>
-
-								<div class="text-gray-500">
-									<ChevronRight />
-								</div>
-							</div>
-						</button>
-					</Tooltip>
-
-					{#if $config?.features?.enable_notes ?? false}
+					{#if visionCapableModels.length > 0 && $visibleControls['chat.capture']}
 						<Tooltip
 							content={fileUploadCapableModels.length !== selectedModels.length
 								? $i18n.t('Model(s) do not support file upload')
@@ -308,11 +271,142 @@
 							className="w-full"
 						>
 							<button
-								class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!fileUploadEnabled
+								role="menuitem"
+								class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left {!fileUploadEnabled
+									? 'opacity-50'
+									: ''}"
+								type="button"
+								on:click={() => {
+									if (fileUploadEnabled) {
+										if (!detectMobile()) {
+											screenCaptureHandler();
+										} else {
+											const cameraInputElement = document.getElementById('camera-input');
+
+											if (cameraInputElement) {
+												cameraInputElement.click();
+											}
+										}
+										show = false;
+									}
+								}}
+							>
+								<Camera />
+								<div class=" line-clamp-1">{$i18n.t('Capture')}</div>
+							</button>
+						</Tooltip>
+					{/if}
+
+					{#if showAddContext}
+						<button
+							role="menuitem"
+							type="button"
+							class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left"
+							on:click={() => {
+								tab = 'attachments';
+							}}
+						>
+							<DocumentDuplicate />
+							<div class="flex items-center w-full justify-between">
+								<div>{$i18n.t('Attachments')}</div>
+								<div class="text-gray-500"><ChevronRight /></div>
+							</div>
+						</button>
+					{/if}
+				</div>
+			{:else if tab === 'attachments'}
+				<div in:fly={{ x: 20, duration: 150 }}>
+					<button
+						role="menuitem"
+						type="button"
+						class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left"
+						on:click={() => {
+							tab = '';
+						}}
+					>
+						<ChevronLeft />
+						<div>{$i18n.t('Attachments')}</div>
+					</button>
+
+					{#if $visibleControls['chat.attach_webpage']}
+						<Tooltip
+							content={!webUploadEnabled
+								? $i18n.t('You do not have permission to upload web content.')
+								: ''}
+							className="w-full"
+						>
+							<button
+								role="menuitem"
+								class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left {!webUploadEnabled
+									? 'opacity-50'
+									: ''}"
+								type="button"
+								on:click={() => {
+									if (webUploadEnabled) {
+										showAttachWebpageModal = true;
+										show = false;
+									}
+								}}
+							>
+								<GlobeAlt />
+								<div class="line-clamp-1">{$i18n.t('Attach Webpage')}</div>
+							</button>
+						</Tooltip>
+					{/if}
+
+					{#if $visibleControls['chat.attach_files']}
+						<Tooltip
+							content={fileUploadCapableModels.length !== selectedModels.length
+								? $i18n.t('Model(s) do not support file upload')
+								: !fileUploadEnabled
+									? $i18n.t('You do not have permission to upload files.')
+									: ''}
+							className="w-full"
+						>
+							<button
+								role="menuitem"
+								class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left {!fileUploadEnabled
 									? 'opacity-50'
 									: ''}"
 								on:click={() => {
-									tab = 'notes';
+									if (fileUploadEnabled) {
+										tab = 'files';
+									}
+								}}
+							>
+								<DocumentArrowUp />
+
+								<div class="flex items-center w-full justify-between">
+									<div class="line-clamp-1">
+										{$i18n.t('Attach Files')}
+									</div>
+
+									<div class="text-gray-500">
+										<ChevronRight />
+									</div>
+								</div>
+							</button>
+						</Tooltip>
+					{/if}
+
+					{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true)) && $visibleControls['chat.attach_notes']}
+						<Tooltip
+							content={fileUploadCapableModels.length !== selectedModels.length
+								? $i18n.t('Model(s) do not support file upload')
+								: !fileUploadEnabled
+									? $i18n.t('You do not have permission to upload files.')
+									: ''}
+							className="w-full"
+						>
+							<button
+								role="menuitem"
+								class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left {!fileUploadEnabled
+									? 'opacity-50'
+									: ''}"
+								on:click={() => {
+									if (fileUploadEnabled) {
+										tab = 'notes';
+									}
 								}}
 							>
 								<PageEdit />
@@ -330,70 +424,81 @@
 						</Tooltip>
 					{/if}
 
-					<Tooltip
-						content={fileUploadCapableModels.length !== selectedModels.length
-							? $i18n.t('Model(s) do not support file upload')
-							: !fileUploadEnabled
-								? $i18n.t('You do not have permission to upload files.')
-								: ''}
-						className="w-full"
-					>
-						<button
-							class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!fileUploadEnabled
-								? 'opacity-50'
-								: ''}"
-							on:click={() => {
-								tab = 'knowledge';
-							}}
+					{#if $visibleControls['chat.attach_knowledge']}
+						<Tooltip
+							content={fileUploadCapableModels.length !== selectedModels.length
+								? $i18n.t('Model(s) do not support file upload')
+								: !fileUploadEnabled
+									? $i18n.t('You do not have permission to upload files.')
+									: ''}
+							className="w-full"
 						>
-							<Database />
+							<button
+								role="menuitem"
+								class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left {!fileUploadEnabled
+									? 'opacity-50'
+									: ''}"
+								on:click={() => {
+									if (fileUploadEnabled) {
+										tab = 'knowledge';
+									}
+								}}
+							>
+								<Database />
 
-							<div class="flex items-center w-full justify-between">
-								<div class=" line-clamp-1">
-									{$i18n.t('Attach Knowledge')}
+								<div class="flex items-center w-full justify-between">
+									<div class=" line-clamp-1">
+										{$i18n.t('Attach Knowledge')}
+									</div>
+
+									<div class="text-gray-500">
+										<ChevronRight />
+									</div>
 								</div>
+							</button>
+						</Tooltip>
+					{/if}
 
-								<div class="text-gray-500">
-									<ChevronRight />
-								</div>
-							</div>
-						</button>
-					</Tooltip>
-
-					<Tooltip
-						content={fileUploadCapableModels.length !== selectedModels.length
-							? $i18n.t('Model(s) do not support file upload')
-							: !fileUploadEnabled
-								? $i18n.t('You do not have permission to upload files.')
-								: ''}
-						className="w-full"
-					>
-						<button
-							class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!fileUploadEnabled
-								? 'opacity-50'
-								: ''}"
-							on:click={() => {
-								tab = 'chats';
-							}}
+					{#if $visibleControls['chat.reference_chats']}
+						<Tooltip
+							content={fileUploadCapableModels.length !== selectedModels.length
+								? $i18n.t('Model(s) do not support file upload')
+								: !fileUploadEnabled
+									? $i18n.t('You do not have permission to upload files.')
+									: ''}
+							className="w-full"
 						>
-							<ClockRotateRight />
+							<button
+								role="menuitem"
+								class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left {!fileUploadEnabled
+									? 'opacity-50'
+									: ''}"
+								on:click={() => {
+									if (fileUploadEnabled) {
+										tab = 'chats';
+									}
+								}}
+							>
+								<ClockRotateRight />
 
-							<div class="flex items-center w-full justify-between">
-								<div class=" line-clamp-1">
-									{$i18n.t('Reference Chats')}
-								</div>
+								<div class="flex items-center w-full justify-between">
+									<div class=" line-clamp-1">
+										{$i18n.t('Reference Chats')}
+									</div>
 
-								<div class="text-gray-500">
-									<ChevronRight />
+									<div class="text-gray-500">
+										<ChevronRight />
+									</div>
 								</div>
-							</div>
-						</button>
-					</Tooltip>
+							</button>
+						</Tooltip>
+					{/if}
 
 					{#if fileUploadEnabled}
 						{#if $config?.features?.enable_google_drive_integration}
 							<button
-								class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl"
+								role="menuitem"
+								class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left"
 								type="button"
 								on:click={() => {
 									uploadGoogleDriveHandler();
@@ -436,7 +541,8 @@
 
 						{#if $config?.features?.enable_onedrive_integration && ($config?.features?.enable_onedrive_personal || $config?.features?.enable_onedrive_business)}
 							<button
-								class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl {!fileUploadEnabled
+								role="menuitem"
+								class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left {!fileUploadEnabled
 									? 'opacity-50'
 									: ''}"
 								on:click={() => {
@@ -543,8 +649,9 @@
 					{/if}
 				</div>
 			{:else if tab === 'tool_permissions'}
-				<div class="flex max-h-72 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
+				<div class="flex min-h-0 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
 					<button
+						role="menuitem"
 						class="flex w-full shrink-0 justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
 							tab = '';
@@ -563,7 +670,9 @@
 						{#each toolApprovalModes as mode}
 							<Tooltip content={$i18n.t(mode.description)} className="w-full">
 								<button
-									class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl"
+									role="menuitemradio"
+									aria-checked={toolApprovalMode === mode.value}
+									class="flex gap-2 w-full items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left"
 									on:click={() => {
 										toolApprovalMode = mode.value;
 										onToolApprovalModeChange(mode.value);
@@ -592,11 +701,12 @@
 					</div>
 				</div>
 			{:else if tab === 'knowledge'}
-				<div class="flex max-h-72 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
+				<div class="flex min-h-0 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
 					<button
+						role="menuitem"
 						class="flex w-full shrink-0 justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
-							tab = '';
+							tab = 'attachments';
 						}}
 					>
 						<ChevronLeft />
@@ -611,11 +721,12 @@
 					<Knowledge {onSelect} />
 				</div>
 			{:else if tab === 'notes'}
-				<div class="flex max-h-72 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
+				<div class="flex min-h-0 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
 					<button
+						role="menuitem"
 						class="flex w-full shrink-0 justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
-							tab = '';
+							tab = 'attachments';
 						}}
 					>
 						<ChevronLeft />
@@ -630,11 +741,12 @@
 					<Notes {onSelect} />
 				</div>
 			{:else if tab === 'files'}
-				<div class="flex max-h-72 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
+				<div class="flex min-h-0 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
 					<button
+						role="menuitem"
 						class="flex w-full shrink-0 justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
-							tab = '';
+							tab = 'attachments';
 						}}
 					>
 						<ChevronLeft />
@@ -649,11 +761,12 @@
 					<Files {onSelect} />
 				</div>
 			{:else if tab === 'chats'}
-				<div class="flex max-h-72 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
+				<div class="flex min-h-0 flex-col overflow-hidden" in:fly={{ x: 20, duration: 150 }}>
 					<button
+						role="menuitem"
 						class="flex w-full shrink-0 justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
-							tab = '';
+							tab = 'attachments';
 						}}
 					>
 						<ChevronLeft />
@@ -665,14 +778,15 @@
 						</div>
 					</button>
 
-					<Chats {onSelect} />
+					<Chats {chatId} {onSelect} />
 				</div>
 			{:else if tab === 'microsoft_onedrive'}
 				<div in:fly={{ x: 20, duration: 150 }}>
 					<button
+						role="menuitem"
 						class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
-							tab = '';
+							tab = 'attachments';
 						}}
 					>
 						<ChevronLeft />
@@ -686,6 +800,7 @@
 
 					{#if $config?.features?.enable_onedrive_personal}
 						<button
+							role="menuitem"
 							class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left"
 							type="button"
 							on:click={() => {
@@ -701,6 +816,7 @@
 
 					{#if $config?.features?.enable_onedrive_business}
 						<button
+							role="menuitem"
 							class="flex w-full gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal select-none cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40 rounded-xl text-left"
 							type="button"
 							on:click={() => {
@@ -715,6 +831,7 @@
 					{/if}
 				</div>
 			{/if}
+			<slot name="integrations" />
 		</DropdownMenu>
 	</div>
 </Dropdown>

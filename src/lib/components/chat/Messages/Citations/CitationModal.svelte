@@ -6,6 +6,7 @@
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import { settings, config } from '$lib/stores';
 	import { injectCsp } from '$lib/utils/csp';
+	import { isValidHttpUrl } from '$lib/utils';
 
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
@@ -71,7 +72,7 @@
 
 		const baseUrl = file_id
 			? `${WEBUI_API_BASE_URL}/files/${file_id}/content${page !== undefined ? `#page=${page + 1}` : ''}`
-			: sourceUrl?.includes('http')
+			: isValidHttpUrl(sourceUrl)
 				? sourceUrl
 				: null;
 
@@ -95,16 +96,16 @@
 	};
 </script>
 
-<Modal size="lg" bind:show>
+<Modal ariaLabel={citation?.source?.name ?? $i18n.t('Citation')} size="lg" bind:show>
 	<div>
 		<div class=" flex justify-between dark:text-gray-300 px-4.5 pt-3 pb-2">
 			<div class=" text-sm font-medium self-center flex items-center">
 				{#if citation?.source?.name}
 					{@const document = mergedDocuments?.[0]}
-					{#if document?.metadata?.file_id || document.source?.url?.includes('http')}
+					{#if document?.metadata?.file_id || isValidHttpUrl(document.source?.url)}
 						<Tooltip
 							className="w-fit"
-							content={document.source?.url?.includes('http')
+							content={isValidHttpUrl(document.source?.url)
 								? $i18n.t('Open link')
 								: $i18n.t('Open file')}
 							placement="top-start"
@@ -114,7 +115,7 @@
 								class="hover:text-gray-500 dark:hover:text-gray-100 underline grow line-clamp-1"
 								href={document?.metadata?.file_id
 									? `${WEBUI_API_BASE_URL}/files/${document?.metadata?.file_id}/content${document?.metadata?.page !== undefined ? `#page=${document.metadata.page + 1}` : ''}`
-									: document.source?.url?.includes('http')
+									: isValidHttpUrl(document.source?.url)
 										? document.source.url
 										: `#`}
 								target="_blank"
@@ -130,7 +131,7 @@
 				{/if}
 			</div>
 			<button
-				class="self-center rounded-lg p-1 text-gray-500 transition hover:bg-gray-50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+				class="self-center rounded-lg py-1 text-gray-500 transition hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 px-0"
 				aria-label={$i18n.t('Close citation modal')}
 				on:click={() => {
 					show = false;
@@ -161,7 +162,7 @@
 							<div
 								class=" text-sm font-normal dark:text-gray-300 flex items-center gap-2 w-fit mb-1"
 							>
-								{#if document.source?.url?.includes('http')}
+								{#if isValidHttpUrl(document.source?.url)}
 									{@const snippetUrl = getTextFragmentUrl(document)}
 									{#if snippetUrl}
 										<a

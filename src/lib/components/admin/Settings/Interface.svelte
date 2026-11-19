@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getModels, getTaskConfig, updateTaskConfig } from '$lib/apis';
 	import { getChatConfig, updateChatConfig } from '$lib/apis/chats';
-	import { createEventDispatcher, onMount, getContext } from 'svelte';
+	import { onMount, getContext, tick } from 'svelte';
 	import { toast } from 'svelte-sonner';
 
 	import { getBaseModels } from '$lib/apis/models';
@@ -10,14 +10,20 @@
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import SettingsSelect from '$lib/components/common/SettingsSelect.svelte';
+	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
 	import ExperimentalBadge from '$lib/components/common/ExperimentalBadge.svelte';
 	import AdvancedParams from '$lib/components/chat/Settings/Advanced/AdvancedParams.svelte';
 	import AdminSettingField from './AdminSettingField.svelte';
 	import AdminSettingRow from './AdminSettingRow.svelte';
 	import AdminSettingSection from './AdminSettingSection.svelte';
+	import AdminSettingSaveButton from './AdminSettingSaveButton.svelte';
 	import { config as appConfig } from '$lib/stores';
+	import { setInterfaceVisibility } from '$lib/apis/configs';
+	import type { Visibility } from '$lib/utils/ui-visibility';
+	import { CONTROL_LABELS, type ControlId } from '$lib/utils/ui-visibility';
+	import VisibilitySettings from './Interface/Visibility.svelte';
 
-	const dispatch = createEventDispatcher();
+	export let saveHandler: () => void;
 
 	const i18n: any = getContext('i18n');
 
@@ -50,9 +56,158 @@
 		CONTEXT_COMPACTION_TOKEN_CAP: 80000,
 		CONTEXT_COMPACTION_RETENTION_PERCENTAGE: 40,
 		CONTEXT_COMPACTION_PROMPT_TEMPLATE: '',
-		ENABLE_TOOL_PERMISSIONS: false
+		VISUALIZATION_PROMPT_TEMPLATE: '',
+		ENABLE_TOOL_PERMISSIONS: false,
+		ENABLE_TOOL_CALL_LABELS: false,
+		ENABLE_TOOL_PERMISSIONS_AUTO: false,
+		TOOL_PERMISSIONS_AUTO_DECISIONS_API_BASE_URL: 'https://api.openai.com/v1',
+		TOOL_PERMISSIONS_AUTO_DECISIONS_API_KEY: '',
+		TOOL_PERMISSIONS_AUTO_DECISIONS_MODEL: 'gpt-6-luna',
+		TOOL_PERMISSIONS_AUTO_DECISIONS_THRESHOLD: 0.5,
+		TOOL_PERMISSIONS_AUTO_ENGINE: '',
+		TOOL_PERMISSIONS_AUTO_PROMPT: '',
+		ENABLE_TOOL_SEARCH: false,
+		TOOL_SEARCH_ENGINE: 'bm25',
+		TOOL_SEARCH_DECISIONS_API_BASE_URL: 'https://api.openai.com/v1',
+		TOOL_SEARCH_DECISIONS_API_KEY: '',
+		TOOL_SEARCH_DECISIONS_MODEL: 'gpt-6-luna',
+		TOOL_SEARCH_DECISIONS_THRESHOLD: 0.5,
+		TOOL_SEARCH_DECISIONS_PROMPT: '',
+		TOOL_SEARCH_DEFER_THRESHOLD: 400,
+		TOOL_SEARCH_ALWAYS_LOADED: [] as string[],
+		TOOL_SEARCH_DEFER_BUILTIN_TOOLS: true
+	};
+	let toolSearchAlwaysLoaded = '';
+	let defaultDecisionsPrompt = '';
+	let defaultPermissionsPrompt = '';
+	let toolSearchEmbeddingModel = '';
+	const readChatConfigMetadata = () => {
+		const {
+			DEFAULT_TOOL_SEARCH_DECISIONS_PROMPT = '',
+			DEFAULT_TOOL_PERMISSIONS_AUTO_PROMPT = '',
+			TOOL_SEARCH_EMBEDDING_MODEL = '',
+			...settings
+		} = chatConfig as typeof chatConfig & {
+			DEFAULT_TOOL_SEARCH_DECISIONS_PROMPT?: string;
+			DEFAULT_TOOL_PERMISSIONS_AUTO_PROMPT?: string;
+			TOOL_SEARCH_EMBEDDING_MODEL?: string;
+		};
+		defaultDecisionsPrompt = DEFAULT_TOOL_SEARCH_DECISIONS_PROMPT;
+		defaultPermissionsPrompt = DEFAULT_TOOL_PERMISSIONS_AUTO_PROMPT;
+		toolSearchEmbeddingModel = TOOL_SEARCH_EMBEDDING_MODEL;
+		chatConfig = settings;
 	};
 	let showTaskParameters = false;
+	let visibility: Visibility = { ...($appConfig?.ui?.visibility ?? {}) };
+
+	let savedConfig: Record<string, any> | null = null;
+	$: settings = {
+		...Object.fromEntries(
+			(Object.keys(CONTROL_LABELS) as ControlId[]).map((id) => [id, visibility[id] !== false])
+		),
+		...taskConfig,
+		TASK_MODEL_PARAMS: configuredParams(taskConfig.TASK_MODEL_PARAMS),
+		...chatConfig,
+		TOOL_SEARCH_ALWAYS_LOADED: toolSearchAlwaysLoaded
+	};
+	$: settingLabels = {
+		...Object.fromEntries(
+			Object.entries(CONTROL_LABELS).map(([id, label]) => [id, $i18n.t(label)])
+		),
+		TASK_MODEL: $i18n.t('settings.admin.interface.localTaskModel.label'),
+		TASK_MODEL_EXTERNAL: $i18n.t('settings.admin.interface.externalTaskModel.label'),
+		TASK_MODEL_PARAMS: $i18n.t('settings.admin.interface.taskModelParameters.label'),
+		ENABLE_CONTEXT_COMPACTION: $i18n.t('settings.admin.interface.contextCompaction.label'),
+		CONTEXT_COMPACTION_MODEL: $i18n.t('settings.admin.interface.contextCompactionModel.label'),
+		CONTEXT_COMPACTION_TOKEN_THRESHOLD: $i18n.t('settings.admin.interface.tokenThreshold.label'),
+		CONTEXT_COMPACTION_TOKEN_CAP: $i18n.t('settings.admin.interface.tokenCap.label'),
+		CONTEXT_COMPACTION_RETENTION_PERCENTAGE: $i18n.t(
+			'settings.admin.interface.retainedMessages.label'
+		),
+		CONTEXT_COMPACTION_PROMPT_TEMPLATE: $i18n.t(
+			'settings.admin.interface.contextCompactionPrompt.label'
+		),
+		ENABLE_TOOL_CALL_LABELS: $i18n.t('settings.admin.interface.toolCallLabels.label'),
+		ENABLE_TOOL_PERMISSIONS: $i18n.t('settings.admin.interface.toolPermissions.label'),
+		ENABLE_TOOL_PERMISSIONS_AUTO: $i18n.t('settings.admin.interface.toolPermissionsAuto.label'),
+		TOOL_PERMISSIONS_AUTO_ENGINE: $i18n.t(
+			'settings.admin.interface.toolPermissionsAutoEngine.label'
+		),
+		TOOL_PERMISSIONS_AUTO_DECISIONS_API_BASE_URL: $i18n.t(
+			'settings.admin.interface.toolPermissionsDecisionsUrl.label'
+		),
+		TOOL_PERMISSIONS_AUTO_DECISIONS_API_KEY: $i18n.t(
+			'settings.admin.interface.toolPermissionsDecisionsKey.label'
+		),
+		TOOL_PERMISSIONS_AUTO_DECISIONS_MODEL: $i18n.t(
+			'settings.admin.interface.toolPermissionsDecisionsModel.label'
+		),
+		TOOL_PERMISSIONS_AUTO_DECISIONS_THRESHOLD: $i18n.t(
+			'settings.admin.interface.toolPermissionsDecisionsThreshold.label'
+		),
+		TOOL_PERMISSIONS_AUTO_PROMPT: $i18n.t(
+			'settings.admin.interface.toolPermissionsAutoPrompt.label'
+		),
+		ENABLE_TOOL_SEARCH: $i18n.t('settings.admin.interface.toolSearch.label'),
+		TOOL_SEARCH_ENGINE: $i18n.t('settings.admin.interface.toolSearchEngine.label'),
+		TOOL_SEARCH_DECISIONS_API_BASE_URL: $i18n.t(
+			'settings.admin.interface.toolSearchDecisionsUrl.label'
+		),
+		TOOL_SEARCH_DECISIONS_API_KEY: $i18n.t('settings.admin.interface.toolSearchDecisionsKey.label'),
+		TOOL_SEARCH_DECISIONS_MODEL: $i18n.t('settings.admin.interface.toolSearchDecisionsModel.label'),
+		TOOL_SEARCH_DECISIONS_THRESHOLD: $i18n.t(
+			'settings.admin.interface.toolSearchDecisionsThreshold.label'
+		),
+		TOOL_SEARCH_DECISIONS_PROMPT: $i18n.t(
+			'settings.admin.interface.toolSearchDecisionsPrompt.label'
+		),
+		TOOL_SEARCH_DEFER_BUILTIN_TOOLS: $i18n.t(
+			'settings.admin.interface.toolSearchDeferBuiltinTools.label'
+		),
+		TOOL_SEARCH_DEFER_THRESHOLD: $i18n.t('settings.admin.interface.toolSearchThreshold.label'),
+		TOOL_SEARCH_ALWAYS_LOADED: $i18n.t('settings.admin.interface.toolSearchAlwaysLoaded.label'),
+		VISUALIZATION_PROMPT_TEMPLATE: $i18n.t('settings.admin.interface.visualizationPrompt.label'),
+		ENABLE_TITLE_GENERATION: $i18n.t('settings.admin.interface.titleGeneration.label'),
+		TITLE_GENERATION_PROMPT_TEMPLATE: $i18n.t(
+			'settings.admin.interface.titleGenerationPrompt.label'
+		),
+		ENABLE_VOICE_MODE_PROMPT: $i18n.t('settings.admin.interface.voiceModePrompt.label'),
+		VOICE_MODE_PROMPT_TEMPLATE: $i18n.t('settings.admin.interface.promptTemplate.label'),
+		ENABLE_FOLLOW_UP_GENERATION: $i18n.t('settings.admin.interface.followUpGeneration.label'),
+		FOLLOW_UP_GENERATION_PROMPT_TEMPLATE: $i18n.t(
+			'settings.admin.interface.followUpGenerationPrompt.label'
+		),
+		ENABLE_TAGS_GENERATION: $i18n.t('settings.admin.interface.tagsGeneration.label'),
+		TAGS_GENERATION_PROMPT_TEMPLATE: $i18n.t('settings.admin.interface.tagsGenerationPrompt.label'),
+		ENABLE_RETRIEVAL_QUERY_GENERATION: $i18n.t(
+			'settings.admin.interface.retrievalQueryGeneration.label'
+		),
+		ENABLE_SEARCH_QUERY_GENERATION: $i18n.t(
+			'settings.admin.interface.webSearchQueryGeneration.label'
+		),
+		QUERY_GENERATION_PROMPT_TEMPLATE: $i18n.t(
+			'settings.admin.interface.queryGenerationPrompt.label'
+		),
+		ENABLE_AUTOCOMPLETE_GENERATION: $i18n.t(
+			'settings.admin.interface.autocompleteGeneration.label'
+		),
+		AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH: $i18n.t(
+			'settings.admin.interface.autocompleteGenerationInputMaxLength.label'
+		),
+		AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE: $i18n.t(
+			'settings.admin.interface.autocompleteGenerationPrompt.label'
+		),
+		IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE: $i18n.t(
+			'settings.admin.interface.imagePromptGenerationPrompt.label'
+		),
+		TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE: $i18n.t(
+			'settings.admin.interface.toolsFunctionCallingPrompt.label'
+		)
+	};
+	const sensitiveKeys = [
+		'TOOL_PERMISSIONS_AUTO_DECISIONS_API_KEY',
+		'TOOL_SEARCH_DECISIONS_API_KEY'
+	];
 
 	const configuredParams = (params: Record<string, any> = {}) =>
 		Object.fromEntries(
@@ -67,22 +222,48 @@
 			TASK_MODEL_PARAMS: configuredParams(taskConfig.TASK_MODEL_PARAMS)
 		};
 
-		[taskConfig, chatConfig] = await Promise.all([
-			updateTaskConfig(localStorage.token, taskConfigPayload),
-			updateChatConfig(localStorage.token, chatConfig)
-		]);
+		try {
+			[taskConfig, chatConfig, visibility] = await Promise.all([
+				updateTaskConfig(localStorage.token, taskConfigPayload),
+				updateChatConfig(localStorage.token, {
+					...chatConfig,
+					TOOL_SEARCH_ALWAYS_LOADED: toolSearchAlwaysLoaded
+						.split(',')
+						.map((item) => item.trim())
+						.filter((item) => item !== '')
+				}),
+				setInterfaceVisibility(localStorage.token, visibility)
+			]);
+		} catch (error) {
+			toast.error(
+				Array.isArray(error) ? error.map((entry) => entry.msg).join('\n') : String(error)
+			);
+			return;
+		}
+		toolSearchAlwaysLoaded = (chatConfig.TOOL_SEARCH_ALWAYS_LOADED ?? []).join(', ');
+		readChatConfigMetadata();
 		appConfig.update((current) =>
 			current
 				? {
 						...current,
+						ui: { ...current.ui, visibility },
 						features: {
 							...current.features,
 							enable_context_compaction: chatConfig.ENABLE_CONTEXT_COMPACTION,
-							enable_tool_permissions: chatConfig.ENABLE_TOOL_PERMISSIONS
+							enable_tool_permissions: chatConfig.ENABLE_TOOL_PERMISSIONS,
+							enable_tool_permissions_auto:
+								chatConfig.ENABLE_TOOL_PERMISSIONS && chatConfig.ENABLE_TOOL_PERMISSIONS_AUTO,
+							enable_title_generation: taskConfig.ENABLE_TITLE_GENERATION,
+							enable_follow_up_generation: taskConfig.ENABLE_FOLLOW_UP_GENERATION,
+							enable_tags_generation: taskConfig.ENABLE_TAGS_GENERATION,
+							enable_autocomplete_generation: taskConfig.ENABLE_AUTOCOMPLETE_GENERATION
 						}
 					}
 				: current
 		);
+		await tick();
+		savedConfig = structuredClone(settings);
+		saveHandler();
 	};
 
 	let workspaceModels: any[] = [];
@@ -123,9 +304,13 @@
 				getChatConfig(localStorage.token)
 			]);
 			taskConfig.TASK_MODEL_PARAMS = taskConfig.TASK_MODEL_PARAMS ?? {};
+			toolSearchAlwaysLoaded = (chatConfig.TOOL_SEARCH_ALWAYS_LOADED ?? []).join(', ');
+			readChatConfigMetadata();
 
 			workspaceModels = await getBaseModels(localStorage.token);
-			baseModels = await getModels(localStorage.token, null, false);
+			baseModels = (await getModels(localStorage.token)).filter(
+				(model: any) => model.owned_by !== 'terminal'
+			);
 
 			models = baseModels.map((m: any) => {
 				const workspaceModel = workspaceModels.find((wm: any) => wm.id === m.id);
@@ -157,6 +342,8 @@
 
 	onMount(async () => {
 		await init();
+		await tick();
+		savedConfig = structuredClone(settings);
 	});
 </script>
 
@@ -165,28 +352,32 @@
 		class="flex h-full flex-col justify-between text-sm"
 		on:submit|preventDefault={() => {
 			updateInterfaceHandler();
-			dispatch('save');
 		}}
 	>
 		<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
-			{$i18n.t('Interface')}
+			{$i18n.t('settings.admin.interface.title')}
 		</h2>
 
 		<div class="flex-1 min-h-0 overflow-y-auto scrollbar-hover pr-1.5">
-			<AdminSettingSection title={$i18n.t('Tasks')} first>
+			<VisibilitySettings bind:visibility />
+			<AdminSettingSection title={$i18n.t('settings.admin.interface.sections.tasks.title')}>
 				<div>
 					<div class="mb-2">
-						<div class="text-xs text-gray-600 dark:text-gray-400">{$i18n.t('Task Model')}</div>
+						<div class="text-xs text-gray-600 dark:text-gray-400">
+							{$i18n.t('settings.admin.interface.taskModel.label')}
+						</div>
 						<div class="mt-1.5 text-[0.6875rem] text-gray-400 dark:text-gray-600">
-							{$i18n.t(
-								'Choose fallback models for background tasks. Current Model follows the active chat model.'
-							)}
+							{$i18n.t('settings.admin.interface.taskModel.description')}
 						</div>
 					</div>
 
 					<div class="grid w-full grid-cols-1 gap-2.5 sm:grid-cols-2">
-						<AdminSettingField label={$i18n.t('Local Task Model')}>
+						<AdminSettingField
+							label={$i18n.t('settings.admin.interface.localTaskModel.label')}
+							forId="task-model"
+						>
 							<SettingsSelect
+								id="task-model"
 								bind:value={taskConfig.TASK_MODEL}
 								className="w-full"
 								placeholder={$i18n.t('Select a model')}
@@ -204,8 +395,12 @@
 							</SettingsSelect>
 						</AdminSettingField>
 
-						<AdminSettingField label={$i18n.t('External Task Model')}>
+						<AdminSettingField
+							label={$i18n.t('settings.admin.interface.externalTaskModel.label')}
+							forId="task-model-external"
+						>
 							<SettingsSelect
+								id="task-model-external"
 								bind:value={taskConfig.TASK_MODEL_EXTERNAL}
 								className="w-full"
 								placeholder={$i18n.t('Select a model')}
@@ -235,7 +430,7 @@
 							}}
 						>
 							<span class="text-xs text-gray-600 dark:text-gray-400">
-								{$i18n.t('Task Model Parameters')}
+								{$i18n.t('settings.admin.interface.taskModelParameters.label')}
 							</span>
 							<span class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
 								{showTaskParameters ? $i18n.t('Close') : $i18n.t('Configure')}
@@ -255,24 +450,10 @@
 				</div>
 			</AdminSettingSection>
 
-			<AdminSettingSection title={$i18n.t('Chat')}>
+			<AdminSettingSection title={$i18n.t('settings.admin.interface.sections.chat.title')}>
 				<AdminSettingRow
-					label={$i18n.t('Tool Permissions')}
-					description={$i18n.t('Show Full access and Ask for approval in the chat input menu.')}
-					let:labelId
-				>
-					<div slot="label" class="flex items-center gap-2">
-						<span>{$i18n.t('Tool Permissions')}</span>
-						<ExperimentalBadge />
-					</div>
-					<Switch bind:state={chatConfig.ENABLE_TOOL_PERMISSIONS} ariaLabelledbyId={labelId} />
-				</AdminSettingRow>
-
-				<AdminSettingRow
-					label={$i18n.t('Context Compaction')}
-					description={$i18n.t(
-						'Summarize older chat history when the conversation context grows large.'
-					)}
+					label={$i18n.t('settings.admin.interface.contextCompaction.label')}
+					description={$i18n.t('settings.admin.interface.contextCompaction.description')}
 					let:labelId
 				>
 					<Switch bind:state={chatConfig.ENABLE_CONTEXT_COMPACTION} ariaLabelledbyId={labelId} />
@@ -280,12 +461,12 @@
 
 				{#if chatConfig.ENABLE_CONTEXT_COMPACTION}
 					<AdminSettingField
-						label={$i18n.t('Context Compaction Model')}
-						description={$i18n.t(
-							'Choose a dedicated model for context compaction summaries. Current Model follows the active chat model.'
-						)}
+						label={$i18n.t('settings.admin.interface.contextCompactionModel.label')}
+						description={$i18n.t('settings.admin.interface.contextCompactionModel.description')}
+						forId="context-compaction-model"
 					>
 						<SettingsSelect
+							id="context-compaction-model"
 							bind:value={chatConfig.CONTEXT_COMPACTION_MODEL}
 							className="w-full"
 							placeholder={$i18n.t('Select a model')}
@@ -306,12 +487,12 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('Token Threshold')}
-						description={$i18n.t(
-							'Older messages are summarized when estimated context exceeds this token limit.'
-						)}
+						label={$i18n.t('settings.admin.interface.tokenThreshold.label')}
+						description={$i18n.t('settings.admin.interface.tokenThreshold.description')}
+						forId="context-compaction-token-threshold"
 					>
 						<input
+							id="context-compaction-token-threshold"
 							type="number"
 							min="1"
 							step="1"
@@ -321,12 +502,12 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('Token Cap')}
-						description={$i18n.t(
-							'Model-specific context compaction thresholds cannot exceed this token limit.'
-						)}
+						label={$i18n.t('settings.admin.interface.tokenCap.label')}
+						description={$i18n.t('settings.admin.interface.tokenCap.description')}
+						forId="context-compaction-token-cap"
 					>
 						<input
+							id="context-compaction-token-cap"
 							type="number"
 							min="1"
 							step="1"
@@ -336,12 +517,12 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('Retained Messages')}
-						description={$i18n.t(
-							'Percentage of recent messages to keep after older messages are summarized.'
-						)}
+						label={$i18n.t('settings.admin.interface.retainedMessages.label')}
+						description={$i18n.t('settings.admin.interface.retainedMessages.description')}
+						forId="context-compaction-retained-messages"
 					>
 						<input
+							id="context-compaction-retained-messages"
 							type="number"
 							min="10"
 							max="50"
@@ -352,20 +533,19 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('Context Compaction Prompt')}
-						description={$i18n.t(
-							'Controls how older messages are rewritten into a running summary.'
-						)}
+						label={$i18n.t('settings.admin.interface.contextCompactionPrompt.label')}
+						description={$i18n.t('settings.admin.interface.contextCompactionPrompt.description')}
 					>
 						<Textarea
 							className={textareaClass}
 							bind:value={chatConfig.CONTEXT_COMPACTION_PROMPT_TEMPLATE}
+							maxSize={300}
 							placeholder={$i18n.t(
 								'Leave empty to use the default prompt, or enter a custom prompt'
 							)}
 						/>
 						<div class="mt-1 text-[0.6875rem] text-gray-400 dark:text-gray-600">
-							{$i18n.t('Available variables')}:
+							{$i18n.t('settings.admin.interface.availableVariables.label')}:
 							<code>{'{{PREVIOUS_SUMMARY}}'}</code>,
 							<code>{'{{COMPACTED_MESSAGES}}'}</code>,
 							<code>{'{{RECENT_MESSAGES}}'}</code>,
@@ -376,10 +556,308 @@
 				{/if}
 			</AdminSettingSection>
 
-			<AdminSettingSection title={$i18n.t('Generation')}>
+			<AdminSettingSection title={$i18n.t('settings.admin.interface.sections.tools.title')}>
 				<AdminSettingRow
-					label={$i18n.t('Title Generation')}
-					description={$i18n.t('Allow automatic names for new chats.')}
+					label={$i18n.t('settings.admin.interface.toolCallLabels.label')}
+					description={$i18n.t('settings.admin.interface.toolCallLabels.description')}
+					let:labelId
+				>
+					<Switch bind:state={chatConfig.ENABLE_TOOL_CALL_LABELS} ariaLabelledbyId={labelId} />
+				</AdminSettingRow>
+
+				<AdminSettingRow
+					label={$i18n.t('settings.admin.interface.toolPermissions.label')}
+					description={$i18n.t('settings.admin.interface.toolPermissions.description')}
+					let:labelId
+				>
+					<div slot="label" class="flex items-center gap-2">
+						<span>{$i18n.t('settings.admin.interface.toolPermissions.label')}</span>
+						<ExperimentalBadge />
+					</div>
+					<Switch bind:state={chatConfig.ENABLE_TOOL_PERMISSIONS} ariaLabelledbyId={labelId} />
+				</AdminSettingRow>
+
+				{#if chatConfig.ENABLE_TOOL_PERMISSIONS}
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.interface.toolPermissionsAuto.label')}
+						description={$i18n.t('settings.admin.interface.toolPermissionsAuto.description')}
+						let:labelId
+					>
+						<Switch
+							bind:state={chatConfig.ENABLE_TOOL_PERMISSIONS_AUTO}
+							ariaLabelledbyId={labelId}
+						/>
+					</AdminSettingRow>
+					{#if chatConfig.ENABLE_TOOL_PERMISSIONS_AUTO}
+						<AdminSettingRow
+							label={$i18n.t('settings.admin.interface.toolPermissionsAutoEngine.label')}
+							let:labelId
+						>
+							<SettingsSelect
+								id={`${labelId}-control`}
+								bind:value={chatConfig.TOOL_PERMISSIONS_AUTO_ENGINE}
+							>
+								<option value="">{$i18n.t('Default')}</option>
+								<option value="decisions">Decisions API</option>
+							</SettingsSelect>
+						</AdminSettingRow>
+						{#if chatConfig.TOOL_PERMISSIONS_AUTO_ENGINE === 'decisions'}
+							<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+								<AdminSettingField
+									label={$i18n.t('settings.admin.interface.toolPermissionsDecisionsUrl.label')}
+									description={$i18n.t(
+										'settings.admin.interface.toolPermissionsDecisionsUrl.description'
+									)}
+									forId="tool-permissions-decisions-url"
+								>
+									<input
+										id="tool-permissions-decisions-url"
+										type="url"
+										class={inputClass}
+										bind:value={chatConfig.TOOL_PERMISSIONS_AUTO_DECISIONS_API_BASE_URL}
+										required
+									/>
+								</AdminSettingField>
+								<AdminSettingField
+									label={$i18n.t('settings.admin.interface.toolPermissionsDecisionsKey.label')}
+									forId="tool-permissions-decisions-key"
+								>
+									<SensitiveInput
+										id="tool-permissions-decisions-key"
+										type="password"
+										variant="settings"
+										bind:value={chatConfig.TOOL_PERMISSIONS_AUTO_DECISIONS_API_KEY}
+										required={false}
+										screenReader={false}
+									/>
+								</AdminSettingField>
+								<AdminSettingField
+									label={$i18n.t('settings.admin.interface.toolPermissionsDecisionsModel.label')}
+									forId="tool-permissions-decisions-model"
+								>
+									<input
+										id="tool-permissions-decisions-model"
+										class={inputClass}
+										bind:value={chatConfig.TOOL_PERMISSIONS_AUTO_DECISIONS_MODEL}
+										required
+									/>
+								</AdminSettingField>
+								<AdminSettingField
+									label={$i18n.t(
+										'settings.admin.interface.toolPermissionsDecisionsThreshold.label'
+									)}
+									description={$i18n.t(
+										'settings.admin.interface.toolPermissionsDecisionsThreshold.description'
+									)}
+									forId="tool-permissions-decisions-threshold"
+								>
+									<input
+										id="tool-permissions-decisions-threshold"
+										type="number"
+										min="0"
+										max="1"
+										step="0.01"
+										class={inputClass}
+										bind:value={chatConfig.TOOL_PERMISSIONS_AUTO_DECISIONS_THRESHOLD}
+										required
+									/>
+								</AdminSettingField>
+							</div>
+						{/if}
+						<AdminSettingField
+							label={$i18n.t('settings.admin.interface.toolPermissionsAutoPrompt.label')}
+							description={$i18n.t(
+								'settings.admin.interface.toolPermissionsAutoPrompt.description'
+							)}
+							forId="tool-permissions-auto-prompt"
+						>
+							<Textarea
+								id="tool-permissions-auto-prompt"
+								className={textareaClass}
+								bind:value={chatConfig.TOOL_PERMISSIONS_AUTO_PROMPT}
+								maxSize={300}
+								placeholder={defaultPermissionsPrompt}
+							/>
+						</AdminSettingField>
+					{/if}
+				{/if}
+
+				<AdminSettingRow
+					label={$i18n.t('settings.admin.interface.toolSearch.label')}
+					description={$i18n.t('settings.admin.interface.toolSearch.description')}
+					let:labelId
+				>
+					<div slot="label" class="flex items-center gap-2">
+						<span>{$i18n.t('settings.admin.interface.toolSearch.label')}</span>
+						<ExperimentalBadge />
+					</div>
+					<Switch bind:state={chatConfig.ENABLE_TOOL_SEARCH} ariaLabelledbyId={labelId} />
+				</AdminSettingRow>
+
+				{#if chatConfig.ENABLE_TOOL_SEARCH}
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.interface.toolSearchEngine.label')}
+						description={$i18n.t('settings.admin.interface.toolSearchEngine.description')}
+						let:labelId
+					>
+						<SettingsSelect id={`${labelId}-control`} bind:value={chatConfig.TOOL_SEARCH_ENGINE}>
+							<option value="bm25">BM25</option>
+							<option value="embeddings"
+								>{$i18n.t('settings.admin.interface.toolSearchEmbeddings.label')}</option
+							>
+							<option value="decisions">Decisions API</option>
+						</SettingsSelect>
+					</AdminSettingRow>
+
+					{#if chatConfig.TOOL_SEARCH_ENGINE === 'embeddings'}
+						<p class="text-xs text-gray-500 dark:text-gray-400">
+							{$i18n.t('settings.admin.interface.toolSearchEmbeddings.description', {
+								model: toolSearchEmbeddingModel || $i18n.t('Not configured')
+							})}
+							<a class="underline" href="/admin/settings/documents">
+								{$i18n.t('settings.admin.interface.toolSearchEmbeddings.settings')}
+							</a>
+						</p>
+					{:else if chatConfig.TOOL_SEARCH_ENGINE === 'decisions'}
+						<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+							<AdminSettingField
+								label={$i18n.t('settings.admin.interface.toolSearchDecisionsUrl.label')}
+								description={$i18n.t('settings.admin.interface.toolSearchDecisionsUrl.description')}
+								forId="tool-search-decisions-url"
+							>
+								<input
+									id="tool-search-decisions-url"
+									type="url"
+									class={inputClass}
+									bind:value={chatConfig.TOOL_SEARCH_DECISIONS_API_BASE_URL}
+									required
+								/>
+							</AdminSettingField>
+							<AdminSettingField
+								label={$i18n.t('settings.admin.interface.toolSearchDecisionsKey.label')}
+								forId="tool-search-decisions-key"
+							>
+								<SensitiveInput
+									id="tool-search-decisions-key"
+									type="password"
+									variant="settings"
+									bind:value={chatConfig.TOOL_SEARCH_DECISIONS_API_KEY}
+									required={false}
+									screenReader={false}
+								/>
+							</AdminSettingField>
+							<AdminSettingField
+								label={$i18n.t('settings.admin.interface.toolSearchDecisionsModel.label')}
+								forId="tool-search-decisions-model"
+							>
+								<input
+									id="tool-search-decisions-model"
+									class={inputClass}
+									bind:value={chatConfig.TOOL_SEARCH_DECISIONS_MODEL}
+									required
+								/>
+							</AdminSettingField>
+							<AdminSettingField
+								label={$i18n.t('settings.admin.interface.toolSearchDecisionsThreshold.label')}
+								description={$i18n.t(
+									'settings.admin.interface.toolSearchDecisionsThreshold.description'
+								)}
+								forId="tool-search-decisions-threshold"
+							>
+								<input
+									id="tool-search-decisions-threshold"
+									type="number"
+									min="0"
+									max="1"
+									step="0.01"
+									class={inputClass}
+									bind:value={chatConfig.TOOL_SEARCH_DECISIONS_THRESHOLD}
+									required
+								/>
+							</AdminSettingField>
+						</div>
+						<AdminSettingField
+							label={$i18n.t('settings.admin.interface.toolSearchDecisionsPrompt.label')}
+							description={$i18n.t(
+								'settings.admin.interface.toolSearchDecisionsPrompt.description'
+							)}
+							forId="tool-search-decisions-prompt"
+						>
+							<Textarea
+								id="tool-search-decisions-prompt"
+								className={textareaClass}
+								bind:value={chatConfig.TOOL_SEARCH_DECISIONS_PROMPT}
+								maxSize={300}
+								placeholder={defaultDecisionsPrompt}
+							/>
+						</AdminSettingField>
+					{/if}
+
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.interface.toolSearchDeferBuiltinTools.label')}
+						description={$i18n.t(
+							'settings.admin.interface.toolSearchDeferBuiltinTools.description'
+						)}
+						let:labelId
+					>
+						<Switch
+							bind:state={chatConfig.TOOL_SEARCH_DEFER_BUILTIN_TOOLS}
+							ariaLabelledbyId={labelId}
+						/>
+					</AdminSettingRow>
+
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.interface.toolSearchThreshold.label')}
+						description={$i18n.t('settings.admin.interface.toolSearchThreshold.description')}
+						let:labelId
+					>
+						<div class="w-24">
+							<input
+								id={`${labelId}-control`}
+								type="number"
+								min="0"
+								step="1"
+								class={inputClass}
+								bind:value={chatConfig.TOOL_SEARCH_DEFER_THRESHOLD}
+							/>
+						</div>
+					</AdminSettingRow>
+
+					<AdminSettingField
+						label={$i18n.t('settings.admin.interface.toolSearchAlwaysLoaded.label')}
+						description={$i18n.t('settings.admin.interface.toolSearchAlwaysLoaded.description')}
+						forId="tool-search-always-loaded"
+					>
+						<input
+							id="tool-search-always-loaded"
+							class={inputClass}
+							type="text"
+							placeholder={$i18n.t('settings.admin.interface.toolSearchAlwaysLoaded.placeholder')}
+							bind:value={toolSearchAlwaysLoaded}
+							autocomplete="off"
+						/>
+					</AdminSettingField>
+				{/if}
+
+				<AdminSettingField
+					label={$i18n.t('settings.admin.interface.visualizationPrompt.label')}
+					description={$i18n.t('settings.admin.interface.visualizationPrompt.description')}
+					forId="visualization-prompt"
+				>
+					<Textarea
+						id="visualization-prompt"
+						className={textareaClass}
+						bind:value={chatConfig.VISUALIZATION_PROMPT_TEMPLATE}
+						maxSize={300}
+						placeholder={$i18n.t('Leave empty to use the default prompt, or enter a custom prompt')}
+					/>
+				</AdminSettingField>
+			</AdminSettingSection>
+
+			<AdminSettingSection title={$i18n.t('settings.admin.interface.sections.generation.title')}>
+				<AdminSettingRow
+					label={$i18n.t('settings.admin.interface.titleGeneration.label')}
+					description={$i18n.t('settings.admin.interface.titleGeneration.description')}
 					let:labelId
 				>
 					<Switch bind:state={taskConfig.ENABLE_TITLE_GENERATION} ariaLabelledbyId={labelId} />
@@ -387,12 +865,13 @@
 
 				{#if taskConfig.ENABLE_TITLE_GENERATION}
 					<AdminSettingField
-						label={$i18n.t('Title Generation Prompt')}
-						description={$i18n.t('Shapes the short label generated for each chat.')}
+						label={$i18n.t('settings.admin.interface.titleGenerationPrompt.label')}
+						description={$i18n.t('settings.admin.interface.titleGenerationPrompt.description')}
 					>
 						<Textarea
 							className={textareaClass}
 							bind:value={taskConfig.TITLE_GENERATION_PROMPT_TEMPLATE}
+							maxSize={300}
 							placeholder={$i18n.t(
 								'Leave empty to use the default prompt, or enter a custom prompt'
 							)}
@@ -401,8 +880,8 @@
 				{/if}
 
 				<AdminSettingRow
-					label={$i18n.t('Voice Mode Prompt')}
-					description={$i18n.t('Apply voice-specific instructions while voice mode is active.')}
+					label={$i18n.t('settings.admin.interface.voiceModePrompt.label')}
+					description={$i18n.t('settings.admin.interface.voiceModePrompt.description')}
 					let:labelId
 				>
 					<Switch bind:state={taskConfig.ENABLE_VOICE_MODE_PROMPT} ariaLabelledbyId={labelId} />
@@ -410,12 +889,13 @@
 
 				{#if taskConfig.ENABLE_VOICE_MODE_PROMPT}
 					<AdminSettingField
-						label={$i18n.t('Prompt Template')}
-						description={$i18n.t('Defines the behavior used for spoken conversations.')}
+						label={$i18n.t('settings.admin.interface.promptTemplate.label')}
+						description={$i18n.t('settings.admin.interface.promptTemplate.description')}
 					>
 						<Textarea
 							className={textareaClass}
 							bind:value={taskConfig.VOICE_MODE_PROMPT_TEMPLATE}
+							maxSize={300}
 							placeholder={$i18n.t(
 								'Leave empty to use the default prompt, or enter a custom prompt'
 							)}
@@ -424,8 +904,8 @@
 				{/if}
 
 				<AdminSettingRow
-					label={$i18n.t('Follow Up Generation')}
-					description={$i18n.t('Show suggested next questions after assistant responses.')}
+					label={$i18n.t('settings.admin.interface.followUpGeneration.label')}
+					description={$i18n.t('settings.admin.interface.followUpGeneration.description')}
 					let:labelId
 				>
 					<Switch bind:state={taskConfig.ENABLE_FOLLOW_UP_GENERATION} ariaLabelledbyId={labelId} />
@@ -433,12 +913,13 @@
 
 				{#if taskConfig.ENABLE_FOLLOW_UP_GENERATION}
 					<AdminSettingField
-						label={$i18n.t('Follow Up Generation Prompt')}
-						description={$i18n.t('Guides the suggestions shown after an assistant response.')}
+						label={$i18n.t('settings.admin.interface.followUpGenerationPrompt.label')}
+						description={$i18n.t('settings.admin.interface.followUpGenerationPrompt.description')}
 					>
 						<Textarea
 							className={textareaClass}
 							bind:value={taskConfig.FOLLOW_UP_GENERATION_PROMPT_TEMPLATE}
+							maxSize={300}
 							placeholder={$i18n.t(
 								'Leave empty to use the default prompt, or enter a custom prompt'
 							)}
@@ -447,8 +928,8 @@
 				{/if}
 
 				<AdminSettingRow
-					label={$i18n.t('Tags Generation')}
-					description={$i18n.t('Create chat tags from conversation content.')}
+					label={$i18n.t('settings.admin.interface.tagsGeneration.label')}
+					description={$i18n.t('settings.admin.interface.tagsGeneration.description')}
 					let:labelId
 				>
 					<Switch bind:state={taskConfig.ENABLE_TAGS_GENERATION} ariaLabelledbyId={labelId} />
@@ -456,12 +937,13 @@
 
 				{#if taskConfig.ENABLE_TAGS_GENERATION}
 					<AdminSettingField
-						label={$i18n.t('Tags Generation Prompt')}
-						description={$i18n.t('Controls how chat tags are inferred.')}
+						label={$i18n.t('settings.admin.interface.tagsGenerationPrompt.label')}
+						description={$i18n.t('settings.admin.interface.tagsGenerationPrompt.description')}
 					>
 						<Textarea
 							className={textareaClass}
 							bind:value={taskConfig.TAGS_GENERATION_PROMPT_TEMPLATE}
+							maxSize={300}
 							placeholder={$i18n.t(
 								'Leave empty to use the default prompt, or enter a custom prompt'
 							)}
@@ -470,8 +952,8 @@
 				{/if}
 
 				<AdminSettingRow
-					label={$i18n.t('Retrieval Query Generation')}
-					description={$i18n.t('Rewrite user requests for knowledge retrieval.')}
+					label={$i18n.t('settings.admin.interface.retrievalQueryGeneration.label')}
+					description={$i18n.t('settings.admin.interface.retrievalQueryGeneration.description')}
 					let:labelId
 				>
 					<Switch
@@ -480,31 +962,34 @@
 					/>
 				</AdminSettingRow>
 
-				<AdminSettingRow
-					label={$i18n.t('Web Search Query Generation')}
-					description={$i18n.t('Rewrite user requests into web-search queries.')}
-					let:labelId
-				>
-					<Switch
-						bind:state={taskConfig.ENABLE_SEARCH_QUERY_GENERATION}
-						ariaLabelledbyId={labelId}
-					/>
-				</AdminSettingRow>
+				{#if $appConfig?.features?.enable_web_search}
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.interface.webSearchQueryGeneration.label')}
+						description={$i18n.t('settings.admin.interface.webSearchQueryGeneration.description')}
+						let:labelId
+					>
+						<Switch
+							bind:state={taskConfig.ENABLE_SEARCH_QUERY_GENERATION}
+							ariaLabelledbyId={labelId}
+						/>
+					</AdminSettingRow>
+				{/if}
 
 				<AdminSettingField
-					label={$i18n.t('Query Generation Prompt')}
-					description={$i18n.t('Shared prompt for retrieval and web-search query rewriting.')}
+					label={$i18n.t('settings.admin.interface.queryGenerationPrompt.label')}
+					description={$i18n.t('settings.admin.interface.queryGenerationPrompt.description')}
 				>
 					<Textarea
 						className={textareaClass}
 						bind:value={taskConfig.QUERY_GENERATION_PROMPT_TEMPLATE}
+						maxSize={300}
 						placeholder={$i18n.t('Leave empty to use the default prompt, or enter a custom prompt')}
 					/>
 				</AdminSettingField>
 
 				<AdminSettingRow
-					label={$i18n.t('Autocomplete Generation')}
-					description={$i18n.t('Suggest completions while users type chat messages.')}
+					label={$i18n.t('settings.admin.interface.autocompleteGeneration.label')}
+					description={$i18n.t('settings.admin.interface.autocompleteGeneration.description')}
 					let:labelId
 				>
 					<Switch
@@ -515,10 +1000,14 @@
 
 				{#if taskConfig.ENABLE_AUTOCOMPLETE_GENERATION}
 					<AdminSettingField
-						label={$i18n.t('Autocomplete Generation Input Max Length')}
-						description={$i18n.t('Limit how much draft text is sent for suggestion generation.')}
+						label={$i18n.t('settings.admin.interface.autocompleteGenerationInputMaxLength.label')}
+						description={$i18n.t(
+							'settings.admin.interface.autocompleteGenerationInputMaxLength.description'
+						)}
+						forId="autocomplete-generation-input-max-length"
 					>
 						<input
+							id="autocomplete-generation-input-max-length"
 							type="number"
 							min="-1"
 							step="1"
@@ -529,12 +1018,15 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('Autocomplete Generation Prompt')}
-						description={$i18n.t('Guides inline completions while users type a message.')}
+						label={$i18n.t('settings.admin.interface.autocompleteGenerationPrompt.label')}
+						description={$i18n.t(
+							'settings.admin.interface.autocompleteGenerationPrompt.description'
+						)}
 					>
 						<Textarea
 							className={textareaClass}
 							bind:value={taskConfig.AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE}
+							maxSize={300}
 							placeholder={$i18n.t(
 								'Leave empty to use the default prompt, or enter a custom prompt'
 							)}
@@ -543,23 +1035,25 @@
 				{/if}
 
 				<AdminSettingField
-					label={$i18n.t('Image Prompt Generation Prompt')}
-					description={$i18n.t('Rewrites user intent into an image-generation prompt.')}
+					label={$i18n.t('settings.admin.interface.imagePromptGenerationPrompt.label')}
+					description={$i18n.t('settings.admin.interface.imagePromptGenerationPrompt.description')}
 				>
 					<Textarea
 						className={textareaClass}
 						bind:value={taskConfig.IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE}
+						maxSize={300}
 						placeholder={$i18n.t('Leave empty to use the default prompt, or enter a custom prompt')}
 					/>
 				</AdminSettingField>
 
 				<AdminSettingField
-					label={$i18n.t('Tools Function Calling Prompt')}
-					description={$i18n.t('Guides how the assistant formats tool and function calls.')}
+					label={$i18n.t('settings.admin.interface.toolsFunctionCallingPrompt.label')}
+					description={$i18n.t('settings.admin.interface.toolsFunctionCallingPrompt.description')}
 				>
 					<Textarea
 						className={textareaClass}
 						bind:value={taskConfig.TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE}
+						maxSize={300}
 						placeholder={$i18n.t('Leave empty to use the default prompt, or enter a custom prompt')}
 					/>
 				</AdminSettingField>
@@ -567,12 +1061,7 @@
 		</div>
 
 		<div class="flex justify-end pt-6 text-sm font-normal">
-			<button
-				class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
-				type="submit"
-			>
-				{$i18n.t('Save')}
-			</button>
+			<AdminSettingSaveButton {settings} {savedConfig} labels={settingLabels} {sensitiveKeys} />
 		</div>
 	</form>
 {:else}

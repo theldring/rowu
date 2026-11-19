@@ -27,7 +27,7 @@
 	};
 </script>
 
-<Modal size="sm" bind:show>
+<Modal ariaLabel={$i18n.t('Add Access')} size="sm" bind:show>
 	<div>
 		<div class="flex justify-between dark:text-gray-100 px-4 pt-3 mb-1">
 			<div class="self-center text-sm font-medium">
@@ -36,7 +36,8 @@
 				</div>
 			</div>
 			<button
-				class="self-center rounded-lg p-1 text-gray-500 transition hover:bg-gray-50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+				aria-label={$i18n.t('Close')}
+				class="self-center rounded-lg py-1 text-gray-500 transition hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 px-0"
 				on:click={() => {
 					show = false;
 				}}
@@ -66,7 +67,7 @@
 
 					<div class="flex justify-end pt-2 text-sm font-normal gap-1.5">
 						<button
-							class="px-3 py-1.5 text-sm font-normal bg-black hover:bg-gray-950 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full flex flex-row space-x-1 items-center"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 							type="submit"
 						>
 							{$i18n.t('Add')}

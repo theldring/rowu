@@ -41,7 +41,7 @@
 	const closeModal = async () => {
 		localStorage.version = $config.version;
 		await settings.set({ ...$settings, ...{ version: $config.version } });
-		await updateUserSettings(localStorage.token, { ui: $settings });
+		await updateUserSettings(localStorage.token, { ui: { version: $config.version } });
 		show = false;
 	};
 
@@ -83,6 +83,7 @@
 </script>
 
 <Modal
+	ariaLabel={`${$i18n.t("What's New in")} ${$WEBUI_NAME}`}
 	bind:show
 	size="lg"
 	className="bg-white dark:bg-gray-900 rounded-3xl overflow-hidden"
@@ -108,7 +109,7 @@
 			</div>
 
 			<button
-				class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-white/10 dark:hover:text-gray-200"
+				class="flex h-8 shrink-0 items-center justify-center rounded-xl text-gray-400 transition hover:text-gray-700 dark:text-gray-500 dark:hover:text-gray-200 px-0"
 				on:click={closeModal}
 				aria-label={$i18n.t('Close')}
 			>

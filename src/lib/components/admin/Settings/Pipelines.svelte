@@ -21,6 +21,7 @@
 	import AdminSettingField from './AdminSettingField.svelte';
 	import AdminSettingRow from './AdminSettingRow.svelte';
 	import AdminSettingSection from './AdminSettingSection.svelte';
+	import AdminSettingSaveButton from './AdminSettingSaveButton.svelte';
 	import SettingsSelect from '$lib/components/common/SettingsSelect.svelte';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
@@ -40,6 +41,14 @@
 	let valves: any = null;
 	let valves_spec: any = null;
 	let selectedPipelineIdx = 0;
+
+	let savedConfig: Record<string, any> | null = null;
+	$: settingLabels = Object.fromEntries(
+		Object.entries(valves_spec?.properties ?? {}).map(([property, spec]: [string, any]) => [
+			property,
+			spec.title
+		])
+	);
 
 	let pipelineDownloadUrl = '';
 	const inputClass =
@@ -75,14 +84,7 @@
 			if (res) {
 				toast.success($i18n.t('Valves updated successfully'));
 				setPipelines();
-				models.set(
-					await getModels(
-						localStorage.token,
-						$config?.features?.enable_direct_connections
-							? ($settings?.directConnections ?? null)
-							: null
-					)
-				);
+				models.set(await getModels(localStorage.token));
 				saveHandler();
 			}
 		} else {
@@ -97,6 +99,7 @@
 
 		valves = null;
 		valves_spec = null;
+		savedConfig = null;
 
 		valves_spec = await getPipelineValvesSpec(
 			localStorage.token,
@@ -114,12 +117,15 @@
 				valves[property] = valves[property].join(',');
 			}
 		}
+
+		savedConfig = structuredClone(valves);
 	};
 
 	const setPipelines = async () => {
 		pipelines = null;
 		valves = null;
 		valves_spec = null;
+		savedConfig = null;
 
 		if ((PIPELINES_LIST ?? []).length > 0) {
 			console.debug(selectedPipelinesUrlIdx);
@@ -149,14 +155,7 @@
 		if (res) {
 			toast.success($i18n.t('Pipeline downloaded successfully'));
 			setPipelines();
-			models.set(
-				await getModels(
-					localStorage.token,
-					$config?.features?.enable_direct_connections
-						? ($settings?.directConnections ?? null)
-						: null
-				)
-			);
+			models.set(await getModels(localStorage.token));
 		}
 
 		downloading = false;
@@ -181,14 +180,7 @@
 			if (res) {
 				toast.success($i18n.t('Pipeline downloaded successfully'));
 				setPipelines();
-				models.set(
-					await getModels(
-						localStorage.token,
-						$config?.features?.enable_direct_connections
-							? ($settings?.directConnections ?? null)
-							: null
-					)
-				);
+				models.set(await getModels(localStorage.token));
 			}
 		} else {
 			toast.error($i18n.t('No file selected'));
@@ -224,14 +216,7 @@
 		if (res) {
 			toast.success($i18n.t('Pipeline deleted successfully'));
 			setPipelines();
-			models.set(
-				await getModels(
-					localStorage.token,
-					$config?.features?.enable_direct_connections
-						? ($settings?.directConnections ?? null)
-						: null
-				)
-			);
+			models.set(await getModels(localStorage.token));
 		}
 	};
 
@@ -254,7 +239,9 @@
 		updateHandler();
 	}}
 >
-	<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">{$i18n.t('Pipelines')}</h2>
+	<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
+		{$i18n.t('settings.admin.pipelines.title')}
+	</h2>
 
 	<div class="flex-1 min-h-0 overflow-y-auto scrollbar-hover pr-1.5">
 		{#if PIPELINES_LIST !== null}
@@ -267,12 +254,17 @@
 					hidden
 				/>
 
-				<AdminSettingSection title={$i18n.t('Source')} first>
+				<AdminSettingSection
+					title={$i18n.t('settings.admin.pipelines.sections.source.title')}
+					first
+				>
 					<AdminSettingField
-						label={$i18n.t('Pipeline URL')}
-						description={$i18n.t('Select the Pipelines server to manage.')}
+						label={$i18n.t('settings.admin.pipelines.pipelineUrl.label')}
+						description={$i18n.t('settings.admin.pipelines.pipelineUrl.description')}
+						forId="pipelines-url"
 					>
 						<SettingsSelect
+							id="pipelines-url"
 							bind:value={selectedPipelinesUrlIdx}
 							className="w-full"
 							placeholder={$i18n.t('Select a pipeline url')}
@@ -294,8 +286,8 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('Upload Pipeline')}
-						description={$i18n.t('Upload a local Python pipeline file to the selected server.')}
+						label={$i18n.t('settings.admin.pipelines.uploadPipeline.label')}
+						description={$i18n.t('settings.admin.pipelines.uploadPipeline.description')}
 					>
 						<div class="flex gap-2">
 							<button
@@ -306,9 +298,9 @@
 								}}
 							>
 								{#if pipelineFiles}
-									{pipelineFiles.length > 0 ? `${pipelineFiles.length}` : ''} pipeline(s) selected
+									{$i18n.t('{{COUNT}} pipeline(s) selected', { COUNT: pipelineFiles.length })}
 								{:else}
-									{$i18n.t('Select a .py file')}
+									{$i18n.t('settings.admin.pipelines.selectAPyFile.label')}
 								{/if}
 							</button>
 
@@ -326,11 +318,13 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('GitHub URL')}
+						label={$i18n.t('settings.admin.pipelines.githubUrl.label')}
 						description={`${$i18n.t('Pipelines are a plugin system with arbitrary code execution.')} ${$i18n.t("Don't fetch random pipelines from sources you don't trust.")}`}
+						forId="pipelines-github-url"
 					>
 						<div class="flex gap-2">
 							<input
+								id="pipelines-github-url"
 								class={inputClass}
 								placeholder={$i18n.t('Enter GitHub Raw URL')}
 								bind:value={pipelineDownloadUrl}
@@ -343,7 +337,9 @@
 								disabled={downloading}
 								type="button"
 							>
-								{downloading ? $i18n.t('Installing') : $i18n.t('Install')}
+								{downloading
+									? $i18n.t('settings.admin.pipelines.installing.label')
+									: $i18n.t('settings.admin.pipelines.install.label')}
 							</button>
 						</div>
 					</AdminSettingField>
@@ -351,13 +347,17 @@
 
 				{#if pipelines !== null}
 					{#if pipelines.length > 0}
-						<AdminSettingSection title={$i18n.t('Pipelines')}>
+						<AdminSettingSection
+							title={$i18n.t('settings.admin.pipelines.sections.pipelines.title')}
+						>
 							<AdminSettingField
-								label={$i18n.t('Pipeline')}
-								description={$i18n.t('Select an installed pipeline to configure or remove.')}
+								label={$i18n.t('settings.admin.pipelines.pipeline.label')}
+								description={$i18n.t('settings.admin.pipelines.pipeline.description')}
+								forId="pipeline"
 							>
 								<div class="flex gap-2">
 									<SettingsSelect
+										id="pipeline"
 										bind:value={selectedPipelineIdx}
 										className="w-full"
 										placeholder={$i18n.t('Select a pipeline')}
@@ -386,16 +386,18 @@
 							</AdminSettingField>
 						</AdminSettingSection>
 
-						<AdminSettingSection title={$i18n.t('Valves')}>
+						<AdminSettingSection title={$i18n.t('settings.admin.pipelines.sections.valves.title')}>
 							{#if pipelines[selectedPipelineIdx ?? 0]?.valves}
 								{#if valves && valves_spec}
 									{#each Object.keys(valves_spec.properties) as property}
 										<div>
 											<AdminSettingRow
+												let:labelId
 												label={valves_spec.properties[property].title}
 												description={valves_spec.properties[property]?.description ?? ''}
 											>
 												<button
+													id={`${labelId}-control`}
 													class={actionButtonClass}
 													type="button"
 													on:click={() => {
@@ -450,7 +452,9 @@
 							{/if}
 						</AdminSettingSection>
 					{:else}
-						<AdminSettingSection title={$i18n.t('Pipelines')}>
+						<AdminSettingSection
+							title={$i18n.t('settings.admin.pipelines.sections.pipelines.title')}
+						>
 							<div class={mutedMessageClass}>{$i18n.t('Pipelines Not Detected')}</div>
 						</AdminSettingSection>
 					{/if}
@@ -460,7 +464,10 @@
 					</div>
 				{/if}
 			{:else}
-				<AdminSettingSection title={$i18n.t('Source')} first>
+				<AdminSettingSection
+					title={$i18n.t('settings.admin.pipelines.sections.source.title')}
+					first
+				>
 					<div class={mutedMessageClass}>{$i18n.t('Pipelines Not Detected')}</div>
 				</AdminSettingSection>
 			{/if}
@@ -475,12 +482,7 @@
 
 	{#if PIPELINES_LIST !== null && PIPELINES_LIST.length > 0}
 		<div class="flex justify-end pt-6 text-sm font-normal">
-			<button
-				class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
-				type="submit"
-			>
-				{$i18n.t('Save')}
-			</button>
+			<AdminSettingSaveButton settings={valves} {savedConfig} labels={settingLabels} />
 		</div>
 	{/if}
 </form>

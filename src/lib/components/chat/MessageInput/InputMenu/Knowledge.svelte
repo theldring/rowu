@@ -225,7 +225,7 @@
 							data-selected={idx === selectedIdx}
 						>
 							<div class="w-full text-left text-black dark:text-gray-100 flex items-center gap-1">
-								<Tooltip content={$i18n.t('Collection')} placement="top">
+								<Tooltip content={$i18n.t('Knowledge Base')} placement="top">
 									<Database className="size-3.5" />
 								</Tooltip>
 
@@ -243,6 +243,7 @@
 
 						<Tooltip content={$i18n.t('Show Files')} placement="top">
 							<button
+								aria-label={$i18n.t('Show Files')}
 								type="button"
 								class=" ml-2 opacity-50 hover:opacity-100 transition"
 								on:click={() => {
@@ -287,7 +288,7 @@
 										}}
 									>
 										<div class=" flex items-center gap-1.5">
-											<Tooltip content={$i18n.t('Collection')} placement="top">
+											<Tooltip content={$i18n.t('File')} placement="top">
 												<DocumentPage className="size-3.5" />
 											</Tooltip>
 

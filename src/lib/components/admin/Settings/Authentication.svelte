@@ -16,11 +16,12 @@
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { config } from '$lib/stores';
-	import { getContext, onMount } from 'svelte';
+	import { getContext, onMount, tick } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import AdminSettingField from './AdminSettingField.svelte';
 	import AdminSettingRow from './AdminSettingRow.svelte';
 	import AdminSettingSection from './AdminSettingSection.svelte';
+	import AdminSettingSaveButton from './AdminSettingSaveButton.svelte';
 	import SettingsSelect from '$lib/components/common/SettingsSelect.svelte';
 
 	const i18n: any = getContext('i18n');
@@ -34,6 +35,7 @@
 		host: '',
 		port: null,
 		attribute_for_mail: 'mail',
+		default_email_domain: '',
 		attribute_for_username: 'uid',
 		app_dn: '',
 		app_dn_password: '',
@@ -50,6 +52,85 @@
 
 	let oauthConfig: any = null;
 	$: oauthEditable = oauthConfig?.ENABLE_OAUTH_PERSISTENT_CONFIG ?? true;
+
+	let savedConfig: Record<string, any> | null = null;
+	$: settings = { ...adminConfig, ENABLE_LDAP, ...LDAP_SERVER, ...oauthConfig };
+	$: settingLabels = {
+		DEFAULT_USER_ROLE: $i18n.t('settings.admin.authentication.defaultUserRole.label'),
+		DEFAULT_GROUP_ID: $i18n.t('settings.admin.authentication.defaultGroup.label'),
+		ENABLE_LOGIN_FORM: $i18n.t('settings.admin.authentication.loginForm.label'),
+		ENABLE_SIGNUP: $i18n.t('settings.admin.authentication.newSignUps.label'),
+		ENABLE_API_KEYS: $i18n.t('settings.admin.authentication.apiKeys.label'),
+		ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS: $i18n.t(
+			'settings.admin.authentication.apiKeyEndpointRestrictions.label'
+		),
+		API_KEYS_ALLOWED_ENDPOINTS: $i18n.t('settings.admin.authentication.allowedEndpoints.label'),
+		JWT_EXPIRES_IN: $i18n.t('settings.admin.authentication.jwtExpiration.label'),
+		ENABLE_MFA: $i18n.t('Require an authenticator for all users'),
+		MFA_ALLOW_OAUTH_BYPASS: $i18n.t('Allow OAuth sign-in without an authenticator'),
+		MFA_ALLOW_TRUSTED_HEADER_BYPASS: $i18n.t(
+			'Allow trusted-header sign-in without an authenticator'
+		),
+		SHOW_ADMIN_DETAILS: $i18n.t('settings.admin.authentication.adminDetails.label'),
+		ADMIN_EMAIL: $i18n.t('settings.admin.authentication.adminContactEmail.label'),
+		PENDING_USER_OVERLAY_TITLE: $i18n.t(
+			'settings.admin.authentication.pendingUserOverlayTitle.label'
+		),
+		PENDING_USER_OVERLAY_CONTENT: $i18n.t(
+			'settings.admin.authentication.pendingUserOverlayContent.label'
+		),
+		ENABLE_LDAP: $i18n.t('settings.admin.authentication.ldap.label'),
+		label: $i18n.t('settings.admin.authentication.label.label'),
+		host: $i18n.t('settings.admin.authentication.host.label'),
+		port: $i18n.t('settings.admin.authentication.port.label'),
+		app_dn: $i18n.t('settings.admin.authentication.applicationDn.label'),
+		app_dn_password: $i18n.t('settings.admin.authentication.applicationDnPassword.label'),
+		attribute_for_mail: $i18n.t('settings.admin.authentication.attributeForMail.label'),
+		attribute_for_username: $i18n.t('settings.admin.authentication.attributeForUsername.label'),
+		default_email_domain: $i18n.t('settings.admin.authentication.defaultEmailDomain.label'),
+		search_base: $i18n.t('settings.admin.authentication.searchBase.label'),
+		search_filters: $i18n.t('settings.admin.authentication.searchFilters.label'),
+		use_tls: $i18n.t('settings.admin.authentication.tls.label'),
+		certificate_path: $i18n.t('settings.admin.authentication.certificatePath.label'),
+		validate_cert: $i18n.t('settings.admin.authentication.validateCertificate.label'),
+		ciphers: $i18n.t('settings.admin.authentication.ciphers.label'),
+		enable_group_management: $i18n.t('settings.admin.authentication.enableGroupManagement.label'),
+		enable_group_creation: $i18n.t('settings.admin.authentication.enableGroupCreation.label'),
+		attribute_for_groups: $i18n.t('settings.admin.authentication.groupAttribute.label'),
+		ENABLE_OAUTH: $i18n.t('settings.admin.authentication.oauthOidc.label'),
+		OAUTH_PROVIDER_NAME: $i18n.t('settings.admin.authentication.providerName.label'),
+		OPENID_PROVIDER_URL: $i18n.t('settings.admin.authentication.providerUrl.label'),
+		OAUTH_CLIENT_ID: $i18n.t('settings.admin.authentication.clientId.label'),
+		OAUTH_CLIENT_SECRET: $i18n.t('settings.admin.authentication.clientSecret.label'),
+		OPENID_REDIRECT_URI: $i18n.t('settings.admin.authentication.redirectUri.label'),
+		OAUTH_SCOPES: $i18n.t('settings.admin.authentication.scopes.label'),
+		OAUTH_EMAIL_CLAIM: $i18n.t('settings.admin.authentication.emailClaim.label'),
+		OAUTH_USERNAME_CLAIM: $i18n.t('settings.admin.authentication.usernameClaim.label'),
+		OAUTH_PICTURE_CLAIM: $i18n.t('settings.admin.authentication.pictureClaim.label'),
+		OAUTH_SUB_CLAIM: $i18n.t('settings.admin.authentication.subClaim.label'),
+		ENABLE_OAUTH_SIGNUP: $i18n.t('settings.admin.authentication.oauthSignup.label'),
+		OAUTH_MERGE_ACCOUNTS_BY_EMAIL: $i18n.t(
+			'settings.admin.authentication.mergeAccountsByEmail.label'
+		),
+		OAUTH_AUTO_REDIRECT: $i18n.t('settings.admin.authentication.autoRedirect.label'),
+		OAUTH_ALLOWED_DOMAINS: $i18n.t('settings.admin.authentication.allowedDomains.label'),
+		ENABLE_OAUTH_ROLE_MANAGEMENT: $i18n.t('settings.admin.authentication.roleMapping.label'),
+		OAUTH_ROLES_CLAIM: $i18n.t('settings.admin.authentication.rolesClaim.label'),
+		OAUTH_ADMIN_ROLES: $i18n.t('settings.admin.authentication.adminRoles.label'),
+		OAUTH_ALLOWED_ROLES: $i18n.t('settings.admin.authentication.allowedRoles.label'),
+		ENABLE_OAUTH_GROUP_MANAGEMENT: $i18n.t(
+			'settings.admin.authentication.enableOauthGroupManagement.label'
+		),
+		ENABLE_OAUTH_GROUP_CREATION: $i18n.t(
+			'settings.admin.authentication.enableOauthGroupCreation.label'
+		),
+		OAUTH_GROUP_CLAIM: $i18n.t('settings.admin.authentication.groupClaim.label'),
+		OAUTH_BLOCKED_GROUPS: $i18n.t('settings.admin.authentication.blockedGroups.label'),
+		OAUTH_UPDATE_EMAIL_ON_LOGIN: $i18n.t('settings.admin.authentication.updateEmail.label'),
+		OAUTH_UPDATE_NAME_ON_LOGIN: $i18n.t('settings.admin.authentication.updateName.label'),
+		OAUTH_UPDATE_PICTURE_ON_LOGIN: $i18n.t('settings.admin.authentication.updatePicture.label')
+	};
+	const sensitiveKeys = ['app_dn_password', 'OAUTH_CLIENT_SECRET'];
 	const inputClass =
 		'w-full h-7 rounded-lg border border-gray-100/50 bg-gray-50/40 px-2 text-xs text-gray-700 outline-hidden transition-colors placeholder:text-gray-300 focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-gray-300 dark:placeholder:text-gray-700 dark:focus:border-blue-500';
 	const textareaClass =
@@ -57,6 +138,7 @@
 
 	const updateLdapServerHandler = async () => {
 		await updateLdapConfig(localStorage.token, ENABLE_LDAP);
+		savedConfig = { ...savedConfig, ENABLE_LDAP };
 		if (!ENABLE_LDAP) return true;
 
 		// Honor the "Default to memberOf" hint: fall back to the default group
@@ -70,6 +152,9 @@
 			toast.error(`${error}`);
 			return null;
 		});
+		if (res) {
+			savedConfig = { ...savedConfig, ...structuredClone(LDAP_SERVER) };
+		}
 
 		return !!res;
 	};
@@ -82,6 +167,7 @@
 		});
 		if (res) {
 			oauthConfig = res;
+			savedConfig = { ...savedConfig, ...structuredClone(res) };
 		}
 		return !!res;
 	};
@@ -92,15 +178,26 @@
 			toast.error(`${error}`);
 			return null;
 		});
+		if (res?.sessions_revoked) {
+			localStorage.removeItem('token');
+			window.location.href = '/auth?state=logout&form=signin';
+			return false;
+		}
+		if (res) {
+			adminConfig = res;
+			savedConfig = { ...savedConfig, ...structuredClone(res) };
+		}
 		return !!res;
 	};
 
 	const submitHandler = async () => {
-		const adminSaved = await updateAdminHandler();
 		const ldapSaved = await updateLdapServerHandler();
 		const oauthSaved = await updateOAuthHandler();
+		if (!ldapSaved || !oauthSaved) return;
 
-		if (adminSaved && ldapSaved && oauthSaved) {
+		// Save MFA policy last because changing it revokes the current session.
+		const adminSaved = await updateAdminHandler();
+		if (adminSaved) {
 			toast.success($i18n.t('Settings saved successfully!'));
 			await config.set(await getBackendConfig());
 		}
@@ -126,22 +223,30 @@
 
 		const ldapConfig = await getLdapConfig(localStorage.token);
 		ENABLE_LDAP = ldapConfig.ENABLE_LDAP;
+
+		await tick();
+		savedConfig = structuredClone(settings);
 	});
 </script>
 
 <form class="flex h-full flex-col justify-between text-sm" on:submit|preventDefault={submitHandler}>
 	<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
-		{$i18n.t('Authentication')}
+		{$i18n.t('settings.admin.authentication.title')}
 	</h2>
 
 	<div class="flex-1 min-h-0 overflow-y-auto scrollbar-hover pr-1.5">
 		{#if adminConfig !== null}
-			<AdminSettingSection title={$i18n.t('User Access')} first>
+			<AdminSettingSection
+				title={$i18n.t('settings.admin.authentication.sections.userAccess.title')}
+				first
+			>
 				<AdminSettingRow
-					label={$i18n.t('Default User Role')}
-					description={$i18n.t('Role assigned to new users when they create an account.')}
+					label={$i18n.t('settings.admin.authentication.defaultUserRole.label')}
+					description={$i18n.t('settings.admin.authentication.defaultUserRole.description')}
+					let:labelId
 				>
 					<SettingsSelect
+						id={`${labelId}-control`}
 						bind:value={adminConfig.DEFAULT_USER_ROLE}
 						placeholder={$i18n.t('Select a role')}
 					>
@@ -152,14 +257,16 @@
 				</AdminSettingRow>
 
 				<AdminSettingRow
-					label={$i18n.t('Default Group')}
-					description={$i18n.t('Group assigned to new users by default.')}
+					label={$i18n.t('settings.admin.authentication.defaultGroup.label')}
+					description={$i18n.t('settings.admin.authentication.defaultGroup.description')}
+					let:labelId
 				>
 					<SettingsSelect
+						id={`${labelId}-control`}
 						bind:value={adminConfig.DEFAULT_GROUP_ID}
 						placeholder={$i18n.t('Select a group')}
 					>
-						<option value={''}>None</option>
+						<option value={''}>{$i18n.t('None')}</option>
 						{#each groups as group}
 							<option value={group.id}>{group.name}</option>
 						{/each}
@@ -167,16 +274,24 @@
 				</AdminSettingRow>
 
 				<AdminSettingRow
-					label={$i18n.t('New Sign Ups')}
-					description={$i18n.t('Allow new users to create accounts.')}
+					label={$i18n.t('settings.admin.authentication.loginForm.label')}
+					description={$i18n.t('settings.admin.authentication.loginForm.description')}
+					let:labelId
+				>
+					<Switch bind:state={adminConfig.ENABLE_LOGIN_FORM} ariaLabelledbyId={labelId} />
+				</AdminSettingRow>
+
+				<AdminSettingRow
+					label={$i18n.t('settings.admin.authentication.newSignUps.label')}
+					description={$i18n.t('settings.admin.authentication.newSignUps.description')}
 					let:labelId
 				>
 					<Switch bind:state={adminConfig.ENABLE_SIGNUP} ariaLabelledbyId={labelId} />
 				</AdminSettingRow>
 
 				<AdminSettingRow
-					label={$i18n.t('API Keys')}
-					description={$i18n.t('Allow users to create API keys for programmatic access.')}
+					label={$i18n.t('settings.admin.authentication.apiKeys.label')}
+					description={$i18n.t('settings.admin.authentication.apiKeys.description')}
 					let:labelId
 				>
 					<Switch bind:state={adminConfig.ENABLE_API_KEYS} ariaLabelledbyId={labelId} />
@@ -184,8 +299,10 @@
 
 				{#if adminConfig?.ENABLE_API_KEYS}
 					<AdminSettingRow
-						label={$i18n.t('API Key Endpoint Restrictions')}
-						description={$i18n.t('Limit API keys to configured endpoints.')}
+						label={$i18n.t('settings.admin.authentication.apiKeyEndpointRestrictions.label')}
+						description={$i18n.t(
+							'settings.admin.authentication.apiKeyEndpointRestrictions.description'
+						)}
 						let:labelId
 					>
 						<Switch
@@ -196,10 +313,12 @@
 
 					{#if adminConfig?.ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS}
 						<AdminSettingField
-							label={$i18n.t('Allowed Endpoints')}
-							description={$i18n.t('Comma-separated API paths that API keys can access.')}
+							label={$i18n.t('settings.admin.authentication.allowedEndpoints.label')}
+							description={$i18n.t('settings.admin.authentication.allowedEndpoints.description')}
+							forId="api-keys-allowed-endpoints"
 						>
 							<input
+								id="api-keys-allowed-endpoints"
 								class={inputClass}
 								type="text"
 								placeholder={`e.g.) /api/v1/messages, /api/v1/channels`}
@@ -217,12 +336,12 @@
 				{/if}
 
 				<AdminSettingField
-					label={$i18n.t('JWT Expiration')}
-					description={$i18n.t(
-						"Valid time units: 's', 'm', 'h', 'd', 'w' or '-1' for no expiration."
-					)}
+					label={$i18n.t('settings.admin.authentication.jwtExpiration.label')}
+					description={$i18n.t('settings.admin.authentication.jwtExpiration.description')}
+					forId="jwt-expiration"
 				>
 					<input
+						id="jwt-expiration"
 						class={inputClass}
 						type="text"
 						placeholder={`e.g.) "30m","1h", "10d". `}
@@ -241,10 +360,45 @@
 				</AdminSettingField>
 			</AdminSettingSection>
 
-			<AdminSettingSection title={$i18n.t('Pending Accounts')}>
+			<AdminSettingSection title={$i18n.t('Multi-factor authentication')}>
+				<AdminSettingRow let:labelId label={$i18n.t('Require an authenticator for all users')}>
+					<Switch
+						ariaLabelledbyId={labelId}
+						bind:state={adminConfig.ENABLE_MFA}
+						ariaLabel={$i18n.t('Require an authenticator for all users')}
+					/>
+				</AdminSettingRow>
+				<p class="-mt-1 text-[0.6875rem] leading-4 text-gray-400 dark:text-gray-600">
+					{$i18n.t('Changes sign out all devices. Users enroll on their next sign-in.')}
+				</p>
+				{#if adminConfig.ENABLE_MFA}
+					<AdminSettingRow
+						let:labelId
+						label={$i18n.t('Allow OAuth sign-in without an authenticator')}
+						><Switch
+							ariaLabelledbyId={labelId}
+							bind:state={adminConfig.MFA_ALLOW_OAUTH_BYPASS}
+							ariaLabel={$i18n.t('Allow OAuth sign-in without an authenticator')}
+						/></AdminSettingRow
+					>
+					<AdminSettingRow
+						let:labelId
+						label={$i18n.t('Allow trusted-header sign-in without an authenticator')}
+						><Switch
+							ariaLabelledbyId={labelId}
+							bind:state={adminConfig.MFA_ALLOW_TRUSTED_HEADER_BYPASS}
+							ariaLabel={$i18n.t('Allow trusted-header sign-in without an authenticator')}
+						/></AdminSettingRow
+					>
+				{/if}
+			</AdminSettingSection>
+
+			<AdminSettingSection
+				title={$i18n.t('settings.admin.authentication.sections.pendingAccounts.title')}
+			>
 				<AdminSettingRow
-					label={$i18n.t('Admin Details')}
-					description={$i18n.t('Show admin contact details while an account waits for approval.')}
+					label={$i18n.t('settings.admin.authentication.adminDetails.label')}
+					description={$i18n.t('settings.admin.authentication.adminDetails.description')}
 					let:labelId
 				>
 					<Switch bind:state={adminConfig.SHOW_ADMIN_DETAILS} ariaLabelledbyId={labelId} />
@@ -252,10 +406,12 @@
 
 				{#if adminConfig.SHOW_ADMIN_DETAILS}
 					<AdminSettingField
-						label={$i18n.t('Admin Contact Email')}
-						description={$i18n.t('Email shown in the pending account overlay.')}
+						label={$i18n.t('settings.admin.authentication.adminContactEmail.label')}
+						description={$i18n.t('settings.admin.authentication.adminContactEmail.description')}
+						forId="admin-contact-email"
 					>
 						<input
+							id="admin-contact-email"
 							class={inputClass}
 							type="email"
 							placeholder={$i18n.t('Leave empty to use first admin user')}
@@ -265,8 +421,8 @@
 				{/if}
 
 				<AdminSettingField
-					label={$i18n.t('Pending User Overlay Title')}
-					description={$i18n.t('Custom title shown while an account waits for approval.')}
+					label={$i18n.t('settings.admin.authentication.pendingUserOverlayTitle.label')}
+					description={$i18n.t('settings.admin.authentication.pendingUserOverlayTitle.description')}
 				>
 					<Textarea
 						className={textareaClass}
@@ -274,12 +430,15 @@
 							'Enter a title for the pending user info overlay. Leave empty for default.'
 						)}
 						bind:value={adminConfig.PENDING_USER_OVERLAY_TITLE}
+						maxSize={200}
 					/>
 				</AdminSettingField>
 
 				<AdminSettingField
-					label={$i18n.t('Pending User Overlay Content')}
-					description={$i18n.t('Custom message shown while an account waits for approval.')}
+					label={$i18n.t('settings.admin.authentication.pendingUserOverlayContent.label')}
+					description={$i18n.t(
+						'settings.admin.authentication.pendingUserOverlayContent.description'
+					)}
 				>
 					<Textarea
 						className={textareaClass}
@@ -287,15 +446,16 @@
 							'Enter content for the pending user info overlay. Leave empty for default.'
 						)}
 						bind:value={adminConfig.PENDING_USER_OVERLAY_CONTENT}
+						maxSize={200}
 					/>
 				</AdminSettingField>
 			</AdminSettingSection>
 		{/if}
 
-		<AdminSettingSection title={$i18n.t('LDAP')}>
+		<AdminSettingSection title={$i18n.t('settings.admin.authentication.sections.ldap.title')}>
 			<AdminSettingRow
-				label={$i18n.t('LDAP')}
-				description={$i18n.t('Allow users to authenticate with an LDAP directory.')}
+				label={$i18n.t('settings.admin.authentication.ldap.label')}
+				description={$i18n.t('settings.admin.authentication.ldap.description')}
 				let:labelId
 			>
 				<Switch bind:state={ENABLE_LDAP} ariaLabelledbyId={labelId} />
@@ -304,10 +464,12 @@
 			{#if ENABLE_LDAP}
 				<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 					<AdminSettingField
-						label={$i18n.t('Label')}
-						description={$i18n.t('Display name for this LDAP connection.')}
+						label={$i18n.t('settings.admin.authentication.label.label')}
+						description={$i18n.t('settings.admin.authentication.label.description')}
+						forId="ldap-label"
 					>
 						<input
+							id="ldap-label"
 							class={inputClass}
 							required
 							placeholder={$i18n.t('Enter server label')}
@@ -318,10 +480,12 @@
 
 				<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 					<AdminSettingField
-						label={$i18n.t('Host')}
-						description={$i18n.t('LDAP server hostname or IP address.')}
+						label={$i18n.t('settings.admin.authentication.host.label')}
+						description={$i18n.t('settings.admin.authentication.host.description')}
+						forId="ldap-host"
 					>
 						<input
+							id="ldap-host"
 							class={inputClass}
 							required
 							placeholder={$i18n.t('Enter server host')}
@@ -329,13 +493,18 @@
 						/>
 					</AdminSettingField>
 
-					<AdminSettingField label={$i18n.t('Port')} description={$i18n.t('LDAP server port.')}>
+					<AdminSettingField
+						label={$i18n.t('settings.admin.authentication.port.label')}
+						description={$i18n.t('settings.admin.authentication.port.description')}
+						forId="ldap-port"
+					>
 						<Tooltip
 							placement="top-start"
 							content={$i18n.t('Default to 389 or 636 if TLS is enabled')}
 							className="w-full"
 						>
 							<input
+								id="ldap-port"
 								class={inputClass}
 								type="number"
 								placeholder={$i18n.t('Enter server port')}
@@ -347,14 +516,16 @@
 
 				<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 					<AdminSettingField
-						label={$i18n.t('Application DN')}
-						description={$i18n.t('Bind DN used for directory search.')}
+						label={$i18n.t('settings.admin.authentication.applicationDn.label')}
+						description={$i18n.t('settings.admin.authentication.applicationDn.description')}
+						forId="ldap-application-dn"
 					>
 						<Tooltip
 							content={$i18n.t('The Application Account DN you bind with for search')}
 							placement="top-start"
 						>
 							<input
+								id="ldap-application-dn"
 								class={inputClass}
 								placeholder={$i18n.t('Enter Application DN')}
 								bind:value={LDAP_SERVER.app_dn}
@@ -363,8 +534,8 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('Application DN Password')}
-						description={$i18n.t('Password for the bind DN.')}
+						label={$i18n.t('settings.admin.authentication.applicationDnPassword.label')}
+						description={$i18n.t('settings.admin.authentication.applicationDnPassword.description')}
 					>
 						<SensitiveInput
 							variant="settings"
@@ -377,8 +548,9 @@
 
 				<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 					<AdminSettingField
-						label={$i18n.t('Attribute for Mail')}
-						description={$i18n.t('LDAP attribute used as the user email address.')}
+						label={$i18n.t('settings.admin.authentication.attributeForMail.label')}
+						description={$i18n.t('settings.admin.authentication.attributeForMail.description')}
+						forId="ldap-attribute-for-mail"
 					>
 						<Tooltip
 							content={$i18n.t(
@@ -387,6 +559,7 @@
 							placement="top-start"
 						>
 							<input
+								id="ldap-attribute-for-mail"
 								class={inputClass}
 								required
 								placeholder={$i18n.t('Example: mail')}
@@ -396,8 +569,9 @@
 					</AdminSettingField>
 
 					<AdminSettingField
-						label={$i18n.t('Attribute for Username')}
-						description={$i18n.t('LDAP attribute used as the username.')}
+						label={$i18n.t('settings.admin.authentication.attributeForUsername.label')}
+						description={$i18n.t('settings.admin.authentication.attributeForUsername.description')}
+						forId="ldap-attribute-for-username"
 					>
 						<Tooltip
 							content={$i18n.t(
@@ -406,6 +580,7 @@
 							placement="top-start"
 						>
 							<input
+								id="ldap-attribute-for-username"
 								class={inputClass}
 								required
 								placeholder={$i18n.t('Example: sAMAccountName or uid or userPrincipalName')}
@@ -416,11 +591,26 @@
 				</div>
 
 				<AdminSettingField
-					label={$i18n.t('Search Base')}
-					description={$i18n.t('Base DN used when searching for users.')}
+					label={$i18n.t('settings.admin.authentication.defaultEmailDomain.label')}
+					description={$i18n.t('settings.admin.authentication.defaultEmailDomain.description')}
+					forId="ldap-default-email-domain"
+				>
+					<input
+						id="ldap-default-email-domain"
+						class={inputClass}
+						placeholder="example.com"
+						bind:value={LDAP_SERVER.default_email_domain}
+					/>
+				</AdminSettingField>
+
+				<AdminSettingField
+					label={$i18n.t('settings.admin.authentication.searchBase.label')}
+					description={$i18n.t('settings.admin.authentication.searchBase.description')}
+					forId="ldap-search-base"
 				>
 					<Tooltip content={$i18n.t('The base to search for users')} placement="top-start">
 						<input
+							id="ldap-search-base"
 							class={inputClass}
 							required
 							placeholder={$i18n.t('Example: ou=users,dc=foo,dc=example')}
@@ -430,10 +620,12 @@
 				</AdminSettingField>
 
 				<AdminSettingField
-					label={$i18n.t('Search Filters')}
-					description={$i18n.t('LDAP filter used to match signing-in users.')}
+					label={$i18n.t('settings.admin.authentication.searchFilters.label')}
+					description={$i18n.t('settings.admin.authentication.searchFilters.description')}
+					forId="ldap-search-filters"
 				>
 					<input
+						id="ldap-search-filters"
 						class={inputClass}
 						placeholder={$i18n.t('Example: (&(objectClass=inetOrgPerson)(uid=%s))')}
 						bind:value={LDAP_SERVER.search_filters}
@@ -448,8 +640,8 @@
 				</AdminSettingField>
 
 				<AdminSettingRow
-					label={$i18n.t('TLS')}
-					description={$i18n.t('Use TLS when connecting to the LDAP server.')}
+					label={$i18n.t('settings.admin.authentication.tls.label')}
+					description={$i18n.t('settings.admin.authentication.tls.description')}
 					let:labelId
 				>
 					<Switch bind:state={LDAP_SERVER.use_tls} ariaLabelledbyId={labelId} />
@@ -457,10 +649,12 @@
 
 				{#if LDAP_SERVER.use_tls}
 					<AdminSettingField
-						label={$i18n.t('Certificate Path')}
-						description={$i18n.t('Certificate file used for TLS verification.')}
+						label={$i18n.t('settings.admin.authentication.certificatePath.label')}
+						description={$i18n.t('settings.admin.authentication.certificatePath.description')}
+						forId="ldap-certificate-path"
 					>
 						<input
+							id="ldap-certificate-path"
 							class={inputClass}
 							placeholder={$i18n.t('Enter certificate path')}
 							bind:value={LDAP_SERVER.certificate_path}
@@ -468,19 +662,21 @@
 					</AdminSettingField>
 
 					<AdminSettingRow
-						label={$i18n.t('Validate Certificate')}
-						description={$i18n.t('Verify the LDAP server certificate when TLS is enabled.')}
+						label={$i18n.t('settings.admin.authentication.validateCertificate.label')}
+						description={$i18n.t('settings.admin.authentication.validateCertificate.description')}
 						let:labelId
 					>
 						<Switch bind:state={LDAP_SERVER.validate_cert} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 
 					<AdminSettingField
-						label={$i18n.t('Ciphers')}
-						description={$i18n.t('TLS cipher list for LDAP connections.')}
+						label={$i18n.t('settings.admin.authentication.ciphers.label')}
+						description={$i18n.t('settings.admin.authentication.ciphers.description')}
+						forId="ldap-ciphers"
 					>
 						<Tooltip content={$i18n.t('Default to ALL')} placement="top-start">
 							<input
+								id="ldap-ciphers"
 								class={inputClass}
 								placeholder={$i18n.t('Example: ALL')}
 								bind:value={LDAP_SERVER.ciphers}
@@ -493,8 +689,8 @@
 					Do not alter, remove, obscure, or replace it except as LICENSE permits:
 					https://docs.openwebui.com/license. -->
 				<AdminSettingRow
-					label={$i18n.t('Group Mapping')}
-					description={$i18n.t('Map LDAP groups to Open WebUI groups.')}
+					label={$i18n.t('settings.admin.authentication.enableGroupManagement.label')}
+					description={$i18n.t('settings.admin.authentication.enableGroupManagement.description')}
 					let:labelId
 				>
 					<Switch bind:state={LDAP_SERVER.enable_group_management} ariaLabelledbyId={labelId} />
@@ -502,19 +698,21 @@
 
 				{#if LDAP_SERVER.enable_group_management}
 					<AdminSettingRow
-						label={$i18n.t('Auto-Create Groups')}
-						description={$i18n.t('Create missing groups from LDAP groups.')}
+						label={$i18n.t('settings.admin.authentication.enableGroupCreation.label')}
+						description={$i18n.t('settings.admin.authentication.enableGroupCreation.description')}
 						let:labelId
 					>
 						<Switch bind:state={LDAP_SERVER.enable_group_creation} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 
 					<AdminSettingField
-						label={$i18n.t('Group Attribute')}
-						description={$i18n.t('LDAP attribute containing the user group memberships.')}
+						label={$i18n.t('settings.admin.authentication.groupAttribute.label')}
+						description={$i18n.t('settings.admin.authentication.groupAttribute.description')}
+						forId="ldap-group-attribute"
 					>
 						<Tooltip content={$i18n.t('Default to memberOf')} placement="top-start">
 							<input
+								id="ldap-group-attribute"
 								class={inputClass}
 								placeholder="memberOf"
 								bind:value={LDAP_SERVER.attribute_for_groups}
@@ -526,7 +724,9 @@
 		</AdminSettingSection>
 
 		{#if oauthConfig}
-			<AdminSettingSection title={$i18n.t('OAuth / OIDC')}>
+			<AdminSettingSection
+				title={$i18n.t('settings.admin.authentication.sections.oauthOidc.title')}
+			>
 				{#if !oauthEditable}
 					<div
 						class="rounded-lg bg-yellow-500/10 px-2 py-1.5 text-[0.6875rem] text-yellow-700 dark:text-yellow-200"
@@ -543,20 +743,27 @@
 					disabled={!oauthEditable}
 				>
 					<AdminSettingRow
-						label={$i18n.t('OAuth / OIDC')}
-						description={$i18n.t('Allow users to authenticate with an OAuth / OIDC provider.')}
+						label={$i18n.t('settings.admin.authentication.oauthOidc.label')}
+						description={$i18n.t('settings.admin.authentication.oauthOidc.description')}
 						let:labelId
 					>
 						<Switch bind:state={oauthConfig.ENABLE_OAUTH} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
 
 					{#if oauthConfig.ENABLE_OAUTH}
+						<p class="text-xs text-gray-500 dark:text-gray-400">
+							{$i18n.t(
+								'Restart all Open WebUI instances to apply changes to the provider connection settings.'
+							)}
+						</p>
 						<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 							<AdminSettingField
-								label={$i18n.t('Provider Name')}
-								description={$i18n.t('Display name shown for the OAuth provider.')}
+								label={$i18n.t('settings.admin.authentication.providerName.label')}
+								description={$i18n.t('settings.admin.authentication.providerName.description')}
+								forId="oauth-provider-name"
 							>
 								<input
+									id="oauth-provider-name"
 									class={inputClass}
 									placeholder="SSO"
 									bind:value={oauthConfig.OAUTH_PROVIDER_NAME}
@@ -564,10 +771,12 @@
 							</AdminSettingField>
 
 							<AdminSettingField
-								label={$i18n.t('Provider URL')}
-								description={$i18n.t('OpenID discovery URL for this provider.')}
+								label={$i18n.t('settings.admin.authentication.providerUrl.label')}
+								description={$i18n.t('settings.admin.authentication.providerUrl.description')}
+								forId="oauth-provider-url"
 							>
 								<input
+									id="oauth-provider-url"
 									class={inputClass}
 									placeholder="https://accounts.google.com/.well-known/openid-configuration"
 									bind:value={oauthConfig.OPENID_PROVIDER_URL}
@@ -577,10 +786,12 @@
 
 						<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 							<AdminSettingField
-								label={$i18n.t('Client ID')}
-								description={$i18n.t('OAuth client identifier from the provider.')}
+								label={$i18n.t('settings.admin.authentication.clientId.label')}
+								description={$i18n.t('settings.admin.authentication.clientId.description')}
+								forId="oauth-client-id"
 							>
 								<input
+									id="oauth-client-id"
 									class={inputClass}
 									placeholder={$i18n.t('Enter Client ID')}
 									bind:value={oauthConfig.OAUTH_CLIENT_ID}
@@ -588,8 +799,8 @@
 							</AdminSettingField>
 
 							<AdminSettingField
-								label={$i18n.t('Client Secret')}
-								description={$i18n.t('OAuth client secret from the provider.')}
+								label={$i18n.t('settings.admin.authentication.clientSecret.label')}
+								description={$i18n.t('settings.admin.authentication.clientSecret.description')}
 							>
 								<SensitiveInput
 									variant="settings"
@@ -602,10 +813,12 @@
 
 						<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 							<AdminSettingField
-								label={$i18n.t('Redirect URI')}
-								description={$i18n.t('Callback URI registered with the provider.')}
+								label={$i18n.t('settings.admin.authentication.redirectUri.label')}
+								description={$i18n.t('settings.admin.authentication.redirectUri.description')}
+								forId="oauth-redirect-uri"
 							>
 								<input
+									id="oauth-redirect-uri"
 									class={inputClass}
 									placeholder={$i18n.t('Enter Redirect URI')}
 									bind:value={oauthConfig.OPENID_REDIRECT_URI}
@@ -613,10 +826,12 @@
 							</AdminSettingField>
 
 							<AdminSettingField
-								label={$i18n.t('Scopes')}
-								description={$i18n.t('OAuth scopes requested during sign-in.')}
+								label={$i18n.t('settings.admin.authentication.scopes.label')}
+								description={$i18n.t('settings.admin.authentication.scopes.description')}
+								forId="oauth-scopes"
 							>
 								<input
+									id="oauth-scopes"
 									class={inputClass}
 									placeholder="openid email profile"
 									bind:value={oauthConfig.OAUTH_SCOPES}
@@ -626,10 +841,12 @@
 
 						<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 							<AdminSettingField
-								label={$i18n.t('Email Claim')}
-								description={$i18n.t('Claim used as the user email address.')}
+								label={$i18n.t('settings.admin.authentication.emailClaim.label')}
+								description={$i18n.t('settings.admin.authentication.emailClaim.description')}
+								forId="oauth-email-claim"
 							>
 								<input
+									id="oauth-email-claim"
 									class={inputClass}
 									placeholder="email"
 									bind:value={oauthConfig.OAUTH_EMAIL_CLAIM}
@@ -637,10 +854,12 @@
 							</AdminSettingField>
 
 							<AdminSettingField
-								label={$i18n.t('Username Claim')}
-								description={$i18n.t('Claim used as the display name.')}
+								label={$i18n.t('settings.admin.authentication.usernameClaim.label')}
+								description={$i18n.t('settings.admin.authentication.usernameClaim.description')}
+								forId="oauth-username-claim"
 							>
 								<input
+									id="oauth-username-claim"
 									class={inputClass}
 									placeholder="name"
 									bind:value={oauthConfig.OAUTH_USERNAME_CLAIM}
@@ -650,10 +869,12 @@
 
 						<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 							<AdminSettingField
-								label={$i18n.t('Picture Claim')}
-								description={$i18n.t('Claim used as the profile picture URL.')}
+								label={$i18n.t('settings.admin.authentication.pictureClaim.label')}
+								description={$i18n.t('settings.admin.authentication.pictureClaim.description')}
+								forId="oauth-picture-claim"
 							>
 								<input
+									id="oauth-picture-claim"
 									class={inputClass}
 									placeholder="picture"
 									bind:value={oauthConfig.OAUTH_PICTURE_CLAIM}
@@ -661,10 +882,12 @@
 							</AdminSettingField>
 
 							<AdminSettingField
-								label={$i18n.t('Sub Claim')}
-								description={$i18n.t('Claim used as the stable user identifier.')}
+								label={$i18n.t('settings.admin.authentication.subClaim.label')}
+								description={$i18n.t('settings.admin.authentication.subClaim.description')}
+								forId="oauth-sub-claim"
 							>
 								<input
+									id="oauth-sub-claim"
 									class={inputClass}
 									placeholder="sub"
 									bind:value={oauthConfig.OAUTH_SUB_CLAIM}
@@ -673,16 +896,18 @@
 						</div>
 
 						<AdminSettingRow
-							label={$i18n.t('OAuth Signup')}
-							description={$i18n.t('Allow users to create accounts through OAuth.')}
+							label={$i18n.t('settings.admin.authentication.oauthSignup.label')}
+							description={$i18n.t('settings.admin.authentication.oauthSignup.description')}
 							let:labelId
 						>
 							<Switch bind:state={oauthConfig.ENABLE_OAUTH_SIGNUP} ariaLabelledbyId={labelId} />
 						</AdminSettingRow>
 
 						<AdminSettingRow
-							label={$i18n.t('Merge Accounts by Email')}
-							description={$i18n.t('Link OAuth sign-ins to existing accounts with the same email.')}
+							label={$i18n.t('settings.admin.authentication.mergeAccountsByEmail.label')}
+							description={$i18n.t(
+								'settings.admin.authentication.mergeAccountsByEmail.description'
+							)}
 							let:labelId
 						>
 							<Switch
@@ -692,22 +917,22 @@
 						</AdminSettingRow>
 
 						<AdminSettingRow
-							label={$i18n.t('Auto Redirect')}
-							description={$i18n.t(
-								'Send users directly to the OAuth provider from the sign-in page.'
-							)}
+							label={$i18n.t('settings.admin.authentication.autoRedirect.label')}
+							description={$i18n.t('settings.admin.authentication.autoRedirect.description')}
 							let:labelId
 						>
 							<Switch bind:state={oauthConfig.OAUTH_AUTO_REDIRECT} ariaLabelledbyId={labelId} />
 						</AdminSettingRow>
 
 						<AdminSettingField
-							label={$i18n.t('Allowed Domains')}
-							description={$i18n.t('Email domains allowed to sign in with OAuth.')}
+							label={$i18n.t('settings.admin.authentication.allowedDomains.label')}
+							description={$i18n.t('settings.admin.authentication.allowedDomains.description')}
+							forId="oauth-allowed-domains"
 						>
 							<input
+								id="oauth-allowed-domains"
 								class={inputClass}
-								placeholder="* (all domains)"
+								placeholder={$i18n.t('* (all domains)')}
 								bind:value={oauthConfig.OAUTH_ALLOWED_DOMAINS}
 							/>
 						</AdminSettingField>
@@ -716,8 +941,8 @@
 						Do not alter, remove, obscure, or replace it except as LICENSE permits:
 						https://docs.openwebui.com/license. -->
 						<AdminSettingRow
-							label={$i18n.t('Role Mapping')}
-							description={$i18n.t('Map OAuth claims to Open WebUI roles.')}
+							label={$i18n.t('settings.admin.authentication.roleMapping.label')}
+							description={$i18n.t('settings.admin.authentication.roleMapping.description')}
 							let:labelId
 						>
 							<Switch
@@ -729,10 +954,12 @@
 						{#if oauthConfig.ENABLE_OAUTH_ROLE_MANAGEMENT}
 							<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 								<AdminSettingField
-									label={$i18n.t('Roles Claim')}
-									description={$i18n.t('Claim containing provider roles.')}
+									label={$i18n.t('settings.admin.authentication.rolesClaim.label')}
+									description={$i18n.t('settings.admin.authentication.rolesClaim.description')}
+									forId="oauth-roles-claim"
 								>
 									<input
+										id="oauth-roles-claim"
 										class={inputClass}
 										placeholder="roles"
 										bind:value={oauthConfig.OAUTH_ROLES_CLAIM}
@@ -740,10 +967,12 @@
 								</AdminSettingField>
 
 								<AdminSettingField
-									label={$i18n.t('Admin Roles')}
-									description={$i18n.t('Provider roles that grant admin access.')}
+									label={$i18n.t('settings.admin.authentication.adminRoles.label')}
+									description={$i18n.t('settings.admin.authentication.adminRoles.description')}
+									forId="oauth-admin-roles"
 								>
 									<input
+										id="oauth-admin-roles"
 										class={inputClass}
 										placeholder="admin"
 										bind:value={oauthConfig.OAUTH_ADMIN_ROLES}
@@ -752,10 +981,12 @@
 							</div>
 
 							<AdminSettingField
-								label={$i18n.t('Allowed Roles')}
-								description={$i18n.t('Provider roles allowed to sign in.')}
+								label={$i18n.t('settings.admin.authentication.allowedRoles.label')}
+								description={$i18n.t('settings.admin.authentication.allowedRoles.description')}
+								forId="oauth-allowed-roles"
 							>
 								<input
+									id="oauth-allowed-roles"
 									class={inputClass}
 									placeholder="*"
 									bind:value={oauthConfig.OAUTH_ALLOWED_ROLES}
@@ -767,8 +998,10 @@
 						Do not alter, remove, obscure, or replace it except as LICENSE permits:
 						https://docs.openwebui.com/license. -->
 						<AdminSettingRow
-							label={$i18n.t('Group Mapping')}
-							description={$i18n.t('Map OAuth claims to Open WebUI groups.')}
+							label={$i18n.t('settings.admin.authentication.enableOauthGroupManagement.label')}
+							description={$i18n.t(
+								'settings.admin.authentication.enableOauthGroupManagement.description'
+							)}
 							let:labelId
 						>
 							<Switch
@@ -779,8 +1012,10 @@
 
 						{#if oauthConfig.ENABLE_OAUTH_GROUP_MANAGEMENT}
 							<AdminSettingRow
-								label={$i18n.t('Auto-Create Groups')}
-								description={$i18n.t('Create missing groups from OAuth claims.')}
+								label={$i18n.t('settings.admin.authentication.enableOauthGroupCreation.label')}
+								description={$i18n.t(
+									'settings.admin.authentication.enableOauthGroupCreation.description'
+								)}
 								let:labelId
 							>
 								<Switch
@@ -791,10 +1026,12 @@
 
 							<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 								<AdminSettingField
-									label={$i18n.t('Group Claim')}
-									description={$i18n.t('Claim containing provider groups.')}
+									label={$i18n.t('settings.admin.authentication.groupClaim.label')}
+									description={$i18n.t('settings.admin.authentication.groupClaim.description')}
+									forId="oauth-group-claim"
 								>
 									<input
+										id="oauth-group-claim"
 										class={inputClass}
 										placeholder="groups"
 										bind:value={oauthConfig.OAUTH_GROUP_CLAIM}
@@ -802,10 +1039,12 @@
 								</AdminSettingField>
 
 								<AdminSettingField
-									label={$i18n.t('Blocked Groups')}
-									description={$i18n.t('Provider groups blocked from signing in.')}
+									label={$i18n.t('settings.admin.authentication.blockedGroups.label')}
+									description={$i18n.t('settings.admin.authentication.blockedGroups.description')}
+									forId="oauth-blocked-groups"
 								>
 									<input
+										id="oauth-blocked-groups"
 										class={inputClass}
 										placeholder={$i18n.t('Comma-separated group names')}
 										bind:value={oauthConfig.OAUTH_BLOCKED_GROUPS}
@@ -815,8 +1054,8 @@
 						{/if}
 
 						<AdminSettingRow
-							label={$i18n.t('Update Email')}
-							description={$i18n.t('Refresh the account email from OAuth on sign-in.')}
+							label={$i18n.t('settings.admin.authentication.updateEmail.label')}
+							description={$i18n.t('settings.admin.authentication.updateEmail.description')}
 							let:labelId
 						>
 							<Switch
@@ -826,8 +1065,8 @@
 						</AdminSettingRow>
 
 						<AdminSettingRow
-							label={$i18n.t('Update Name')}
-							description={$i18n.t('Refresh the account name from OAuth on sign-in.')}
+							label={$i18n.t('settings.admin.authentication.updateName.label')}
+							description={$i18n.t('settings.admin.authentication.updateName.description')}
 							let:labelId
 						>
 							<Switch
@@ -837,8 +1076,8 @@
 						</AdminSettingRow>
 
 						<AdminSettingRow
-							label={$i18n.t('Update Picture')}
-							description={$i18n.t('Refresh the profile picture from OAuth on sign-in.')}
+							label={$i18n.t('settings.admin.authentication.updatePicture.label')}
+							description={$i18n.t('settings.admin.authentication.updatePicture.description')}
 							let:labelId
 						>
 							<Switch
@@ -853,11 +1092,6 @@
 	</div>
 
 	<div class="flex justify-end pt-6 text-sm font-normal">
-		<button
-			class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
-			type="submit"
-		>
-			{$i18n.t('Save')}
-		</button>
+		<AdminSettingSaveButton {settings} {savedConfig} labels={settingLabels} {sensitiveKeys} />
 	</div>
 </form>

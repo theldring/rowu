@@ -4,6 +4,7 @@
 	const i18n = getContext('i18n');
 
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+	import { resolveLocalizedModelName } from '$lib/utils/localizedContent';
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import PinSlash from './icons/PinSlash.svelte';
@@ -14,12 +15,14 @@
 	export let onUnpin = () => {};
 
 	let mouseOver = false;
+	$: localizedModelName = resolveLocalizedModelName(model, $i18n.language);
 </script>
 
 {#if model}
 	<!-- svelte-ignore a11y-no-static-element-interactions -->
 	<div
 		class=" flex justify-center text-gray-800 dark:text-gray-200 cursor-grab relative group"
+		role="listitem"
 		data-id={model?.id}
 		on:mouseenter={(e) => {
 			mouseOver = true;
@@ -32,7 +35,7 @@
 			class="grow flex items-center space-x-2 rounded-xl px-2 py-[0.4375rem] group-hover:bg-gray-100 dark:group-hover:bg-gray-900 transition"
 			href="/?model={model?.id}"
 			on:click={onClick}
-			draggable="false"
+			draggable="true"
 		>
 			<div class="self-center shrink-0">
 				<img
@@ -50,7 +53,7 @@
 
 			<div class="flex self-center translate-y-[0.5px]">
 				<div class=" self-center text-[0.8125rem] leading-5 line-clamp-1">
-					{model?.name ?? model.id}
+					{localizedModelName}
 				</div>
 			</div>
 		</a>
@@ -60,6 +63,7 @@
 				<div class=" flex items-center self-center space-x-1.5">
 					<Tooltip content={$i18n.t('Unpin')} className="flex items-center">
 						<button
+							aria-label={$i18n.t('Unpin')}
 							class=" self-center dark:hover:text-white transition"
 							on:click={() => {
 								onUnpin();

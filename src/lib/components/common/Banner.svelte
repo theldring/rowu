@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Banner } from '$lib/types';
+	import { resolveLocalizedString } from '$lib/utils/localizedContent';
 	import { onMount, createEventDispatcher, getContext } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import DOMPurify from 'dompurify';
@@ -46,7 +47,7 @@
 {#if !dismissed}
 	{#if mounted}
 		<div
-			class="{className} top-0 left-0 right-0 py-1 flex justify-center items-center relative border border-transparent text-gray-800 dark:text-gary-100 bg-transparent backdrop-blur-xl z-30"
+			class="{className} no-drag-region top-0 left-0 right-0 py-1 flex justify-center items-center relative border border-transparent text-gray-800 dark:text-gary-100 bg-transparent backdrop-blur-xl z-30"
 			transition:fade={{ delay: 100, duration: 300 }}
 		>
 			<div class=" flex flex-col md:flex-row md:items-center flex-1 text-sm w-fit gap-1.5">
@@ -81,7 +82,6 @@
 							<div
 								class=" ml-1 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-white"
 							>
-								<!--  -->
 								<svg
 									aria-hidden="true"
 									xmlns="http://www.w3.org/2000/svg"
@@ -100,7 +100,16 @@
 					{/if}
 				</div>
 				<div class="flex-1 text-xs text-gray-700 dark:text-white max-h-60 overflow-y-auto">
-					{@html DOMPurify.sanitize(marked.parse((banner?.content ?? '').replace(/\n/g, '<br>')))}
+					{@html DOMPurify.sanitize(
+						marked.parse(
+							resolveLocalizedString(
+								banner?.content,
+								banner?.i18n,
+								$i18n.language,
+								'content'
+							).replace(/\n/g, '<br>')
+						)
+					)}
 				</div>
 			</div>
 
@@ -115,7 +124,6 @@
 					</a>
 
 					<div class=" ml-1 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-white">
-						<!--  -->
 						<svg
 							aria-hidden="true"
 							xmlns="http://www.w3.org/2000/svg"

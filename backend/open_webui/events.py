@@ -5,12 +5,13 @@ import inspect
 import logging
 import time
 import uuid
-from types import SimpleNamespace
 from typing import Any
 
-from open_webui.env import ENABLE_PLUGINS, VERSION
-from open_webui.models.config import Config
+from fastapi import Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from open_webui.env import ENABLE_FUNCTIONS, VERSION
+from open_webui.models.config import Config
 from open_webui.retrieval.web.utils import validate_url
 from open_webui.utils.webhook import post_webhook
 
@@ -41,6 +42,13 @@ class EventDefinition(BaseModel):
 
 class EventDefinitions(BaseModel):
     model_config = ConfigDict(frozen=True)
+
+    COMMENT_CREATED: EventDefinition = EventDefinition(
+        name='comment.created', description='A resource comment or reply was created.', message='Comment created'
+    )
+    COMMENT_UPDATED: EventDefinition = EventDefinition(
+        name='comment.updated', description='A resource comment was edited.', message='Comment updated'
+    )
 
     SYSTEM_STARTUP_STARTED: EventDefinition = EventDefinition(
         name='system.startup.started', description='Application startup began.', message='Startup started'
@@ -99,8 +107,40 @@ class EventDefinitions(BaseModel):
     AUTH_SIGNUP: EventDefinition = EventDefinition(
         name='auth.signup', description='A user account was created through signup.', message='User signed up'
     )
+    AUTH_MFA_ENROLLED: EventDefinition = EventDefinition(
+        name='auth.mfa.enrolled', description='MFA enrolled.', message='MFA enrolled'
+    )
+    AUTH_MFA_REPLACED: EventDefinition = EventDefinition(
+        name='auth.mfa.replaced', description='MFA replaced.', message='MFA replaced'
+    )
+    AUTH_MFA_FAILED: EventDefinition = EventDefinition(
+        name='auth.mfa.failed', description='MFA failed.', message='MFA failed'
+    )
+    AUTH_MFA_THROTTLED: EventDefinition = EventDefinition(
+        name='auth.mfa.throttled', description='MFA throttled.', message='MFA throttled'
+    )
+    AUTH_MFA_RECOVERY_USED: EventDefinition = EventDefinition(
+        name='auth.mfa.recovery_used', description='MFA recovery used.', message='MFA recovery used'
+    )
+    AUTH_MFA_RECOVERY_CODES_REGENERATED: EventDefinition = EventDefinition(
+        name='auth.mfa.recovery_codes_regenerated',
+        description='MFA recovery codes regenerated.',
+        message='MFA recovery codes regenerated',
+    )
+    AUTH_MFA_RESET_REQUESTED: EventDefinition = EventDefinition(
+        name='auth.mfa.reset_requested', description='MFA reset requested.', message='MFA reset requested'
+    )
+    AUTH_MFA_RESET_COMPLETED: EventDefinition = EventDefinition(
+        name='auth.mfa.reset_completed', description='MFA reset completed.', message='MFA reset completed'
+    )
+    AUTH_MFA_POLICY_CHANGED: EventDefinition = EventDefinition(
+        name='auth.mfa.policy_changed', description='MFA policy changed.', message='MFA policy changed'
+    )
     AUTH_LOGIN: EventDefinition = EventDefinition(
         name='auth.login', description='A user successfully logged in.', message='User logged in'
+    )
+    AUTH_SESSIONS_REVOKED: EventDefinition = EventDefinition(
+        name='auth.sessions_revoked', description='All user sessions were revoked.', message='User sessions revoked'
     )
     AUTH_LOGOUT: EventDefinition = EventDefinition(
         name='auth.logout', description='A user logged out.', message='User logged out'
@@ -450,6 +490,16 @@ class EventDefinitions(BaseModel):
     MODEL_DISABLED: EventDefinition = EventDefinition(
         name='model.disabled', description='A model was disabled.', message='Model disabled'
     )
+    MODEL_AVAILABLE: EventDefinition = EventDefinition(
+        name='model.available',
+        description='A model appeared in the fetched model list.',
+        message='Model available',
+    )
+    MODEL_UNAVAILABLE: EventDefinition = EventDefinition(
+        name='model.unavailable',
+        description='A model disappeared from the fetched model list.',
+        message='Model unavailable',
+    )
     MODEL_ACCESS_UPDATED: EventDefinition = EventDefinition(
         name='model.access_updated', description='Model access was updated.', message='Model access updated'
     )
@@ -506,6 +556,12 @@ class EventDefinitions(BaseModel):
     )
     TOOL_UPDATED: EventDefinition = EventDefinition(
         name='tool.updated', description='A tool was updated.', message='Tool updated'
+    )
+    TOOL_ENABLED: EventDefinition = EventDefinition(
+        name='tool.enabled', description='A tool was enabled.', message='Tool enabled'
+    )
+    TOOL_DISABLED: EventDefinition = EventDefinition(
+        name='tool.disabled', description='A tool was disabled.', message='Tool disabled'
     )
     TOOL_DELETED: EventDefinition = EventDefinition(
         name='tool.deleted', description='A tool was deleted.', message='Tool deleted'
@@ -639,6 +695,9 @@ class EventDefinitions(BaseModel):
     IMAGE_EDITED: EventDefinition = EventDefinition(
         name='image.edited', description='An image was edited.', message='Image edited'
     )
+    VIDEO_GENERATED: EventDefinition = EventDefinition(
+        name='video.generated', description='A video was generated.', message='Video generated'
+    )
     AUDIO_SPEECH_REQUESTED: EventDefinition = EventDefinition(
         name='audio.speech_requested', description='Speech generation was requested.', message='Speech requested'
     )
@@ -671,7 +730,7 @@ NOTIFICATION_EVENTS = (
     EVENTS.CHAT_FAILED.name,
     EVENTS.CHANNEL_MESSAGE.name,
     EVENTS.CALENDAR_ALERT.name,
-    EVENTS.RETRIEVAL_CONTENT_PROCESS_FAILED.name,
+    EVENTS.AUTOMATION_RUN_FAILED.name,
 )
 
 
@@ -822,7 +881,7 @@ async def event_target_matches(
     if user_group_ids is None:
         from open_webui.models.groups import Groups
 
-        groups_by_user = await Groups.get_groups_by_member_ids(list(user_ids))
+        groups_by_user = await Groups.get_groups_by_member_ids(list(user_ids), include_inherited=True)
         user_group_ids = {user_id: {group.id for group in groups} for user_id, groups in groups_by_user.items()}
 
     return any(group_ids.intersection(target_group_ids) for group_ids in user_group_ids.values())
@@ -993,7 +1052,7 @@ def event_name(event: EventDefinition | str) -> str:
 
 
 def build_event(
-    request_or_app: Any,
+    request: Request | None,
     event: EventDefinition | str,
     *,
     actor: Any | None = None,
@@ -1002,9 +1061,10 @@ def build_event(
     source: str = 'api',
     data: dict | None = None,
     message: str | None = None,
+    event_id: str | None = None,
 ) -> Event:
     event_name_value = event_name(event)
-    app = getattr(request_or_app, 'app', request_or_app)
+    app = request.app if request is not None else None
     parts = event_name_value.split('.')
     resource = '.'.join(parts[:-1])
     instance_id = getattr(getattr(app, 'state', None), 'instance_id', None)
@@ -1016,7 +1076,7 @@ def build_event(
 
     return Event(
         schema=VERSION,
-        id=str(uuid.uuid4()),
+        id=event_id or str(uuid.uuid4()),
         event=event_name_value,
         resource=resource,
         operation=parts[-1],
@@ -1067,8 +1127,8 @@ def schedule_webhook_dispatch(app: Any, event: Event) -> None:
 
 
 class WebhookEventSink:
-    async def handle_event(self, app: Any, event: Event, request: Any | None = None) -> None:
-        schedule_webhook_dispatch(app, event)
+    async def handle_event(self, request: Request, event: Event) -> None:
+        schedule_webhook_dispatch(request.app, event)
 
 
 def schedule_notification_dispatch(app: Any, event: Event) -> None:
@@ -1081,13 +1141,34 @@ def schedule_notification_dispatch(app: Any, event: Event) -> None:
 
 
 class NotificationEventSink:
-    async def handle_event(self, app: Any, event: Event, request: Any | None = None) -> None:
+    async def handle_event(self, request: Request, event: Event) -> None:
         if event.event in NOTIFICATION_EVENTS:
-            schedule_notification_dispatch(app, event)
+            schedule_notification_dispatch(request.app, event)
 
 
 class SocketSessionEventSink:
-    async def handle_event(self, app: Any, event: Event, request: Any | None = None) -> None:
+    async def handle_event(self, request: Request, event: Event) -> None:
+        from open_webui.socket.main import refresh_chat_access
+
+        if event.event in {
+            EVENTS.FOLDER_ACCESS_UPDATED.name,
+            EVENTS.FOLDER_UPDATED.name,
+            EVENTS.FOLDER_PARENT_UPDATED.name,
+            EVENTS.FOLDER_DELETED.name,
+            EVENTS.CHAT_DELETED_ALL.name,
+        }:
+            await refresh_chat_access()
+        elif event.event in {
+            EVENTS.CHAT_SHARED.name,
+            EVENTS.CHAT_UNSHARED.name,
+            EVENTS.CHAT_FOLDER_UPDATED.name,
+            EVENTS.CHAT_DELETED.name,
+            EVENTS.CHAT_ARCHIVED.name,
+        }:
+            subject = event.subject or {}
+            # User-scoped events (archive all, unshare all) recheck every chat.
+            await refresh_chat_access(subject.get('id') if subject.get('type') == 'chat' else None)
+
         if event.event not in {EVENTS.USER_DELETED.name, EVENTS.USER_ROLE_UPDATED.name}:
             return
 
@@ -1100,16 +1181,13 @@ class SocketSessionEventSink:
         await disconnect_user_sessions(str(subject['id']))
 
 
-async def dispatch_event_functions(
-    app: Any, event: Event, request: Any | None = None, extra_function_ids: list[str] | None = None
-) -> None:
-    if not ENABLE_PLUGINS:
+async def dispatch_event_functions(request: Request, event: Event, extra_function_ids: list[str] | None = None) -> None:
+    if not ENABLE_FUNCTIONS:
         return
 
     from open_webui.models.functions import Functions
     from open_webui.utils.plugin import get_function_module_from_cache
 
-    context = request or SimpleNamespace(app=app)
     event_payload = event.model_dump()
 
     try:
@@ -1126,7 +1204,7 @@ async def dispatch_event_functions(
 
     for function in event_functions:
         try:
-            function_module, _, _ = await get_function_module_from_cache(context, function.id, function=function)
+            function_module, _, _ = await get_function_module_from_cache(request, function.id, function=function)
             handler = getattr(function_module, 'event', None)
             if not handler:
                 continue
@@ -1143,7 +1221,7 @@ async def dispatch_event_functions(
                 '__event__': event,
                 '__event_id__': event.id,
                 '__event_name__': event.event,
-                '__app__': app,
+                '__app__': request.app,
                 '__request__': request,
             }
             params = {key: value for key, value in extra_params.items() if accepts_kwargs or key in sig.parameters}
@@ -1156,24 +1234,32 @@ async def dispatch_event_functions(
             log.exception('Event function failed for %s', function.id)
 
 
-def schedule_event_function_dispatch(app: Any, event: Event, request: Any | None = None) -> None:
+def schedule_event_function_dispatch(request: Request, event: Event) -> None:
     try:
-        asyncio.create_task(dispatch_event_functions(app, event, request))
+        asyncio.create_task(dispatch_event_functions(request, event))
     except RuntimeError:
         log.exception('Event functions could not be scheduled for %s', event.event)
 
 
 class EventFunctionSink:
-    async def handle_event(self, app: Any, event: Event, request: Any | None = None) -> None:
-        schedule_event_function_dispatch(app, event, request)
+    async def handle_event(self, request: Request, event: Event) -> None:
+        schedule_event_function_dispatch(request, event)
 
 
 EVENT_SINKS = [SocketSessionEventSink(), EventFunctionSink(), WebhookEventSink(), NotificationEventSink()]
 
 
+async def _dispatch_event(request, event_payload):
+    for sink in EVENT_SINKS:
+        try:
+            await sink.handle_event(request, event_payload)
+        except Exception:
+            log.exception('Event sink failed for %s', event_payload.event)
+
+
 async def publish_event(
-    request_or_app: Any,
-    event: EventDefinition | str,
+    request: Request,
+    event: EventDefinition | str | Event,
     *,
     actor: Any | None = None,
     subject_id: Any | None = None,
@@ -1182,28 +1268,26 @@ async def publish_event(
     data: dict | None = None,
     message: str | None = None,
 ) -> None:
-    app = getattr(request_or_app, 'app', request_or_app)
-    request = request_or_app if hasattr(request_or_app, 'app') else None
-    event_payload = build_event(
-        request_or_app,
-        event,
-        actor=actor,
-        subject_id=subject_id,
-        subject_type=subject_type,
-        source=source,
-        data=data,
-        message=message,
+    """Deliver an event through the existing sinks. Call after committing source changes."""
+    event_payload = (
+        event
+        if isinstance(event, Event)
+        else build_event(
+            request,
+            event,
+            actor=actor,
+            subject_id=subject_id,
+            subject_type=subject_type,
+            source=source,
+            data=data,
+            message=message,
+        )
     )
-
-    for sink in EVENT_SINKS:
-        try:
-            await sink.handle_event(app, event_payload, request=request)
-        except Exception:
-            log.exception('Event sink failed for %s', event_payload.event)
+    await _dispatch_event(request, event_payload)
 
 
 async def publish_model_provider_request_failed(
-    request_or_app: Any,
+    request: Request,
     *,
     actor: Any | None,
     provider: str,
@@ -1264,7 +1348,7 @@ async def publish_model_provider_request_failed(
         data['upstream_message'] = error
 
     await publish_event(
-        request_or_app,
+        request,
         EVENTS.MODEL_PROVIDER_REQUEST_FAILED,
         actor=actor,
         subject_id=requested_model,

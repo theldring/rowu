@@ -393,7 +393,12 @@
 	});
 </script>
 
-<Modal bind:show={showWebhookModal} size="sm" className="bg-white dark:bg-gray-900 rounded-4xl">
+<Modal
+	ariaLabel={editing ? $i18n.t('Edit webhook') : $i18n.t('Add webhook')}
+	bind:show={showWebhookModal}
+	size="sm"
+	className="bg-white dark:bg-gray-900 rounded-4xl"
+>
 	<div>
 		<div class="flex justify-between dark:text-gray-100 px-4 pt-3 pb-1">
 			<h1 class="text-sm font-medium self-center">
@@ -401,7 +406,7 @@
 			</h1>
 
 			<button
-				class="self-center rounded-lg p-1 text-gray-500 transition hover:bg-gray-50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+				class="self-center rounded-lg py-1 text-gray-500 transition hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 px-0"
 				aria-label={$i18n.t('Close')}
 				type="button"
 				on:click={resetForm}
@@ -565,7 +570,7 @@
 				<div class="mt-3">
 					<div class="flex justify-between items-center">
 						<label for="event-webhook-all-events" class={`text-xs text-gray-500`}
-							>{$i18n.t('Events')}</label
+							>{$i18n.t('settings.admin.general.events.events.label')}</label
 						>
 						<label class="flex items-center gap-1.5 text-xs text-gray-700 dark:text-gray-300">
 							<input
@@ -670,7 +675,7 @@
 
 					<button
 						type="submit"
-						class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full flex flex-row space-x-1 items-center"
+						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 					>
 						{$i18n.t('Save')}
 					</button>
@@ -690,20 +695,23 @@
 />
 
 <div class="mt-5">
-	<div class="mb-2 text-xs text-gray-400 dark:text-gray-600">{$i18n.t('Events')}</div>
+	<div class="mb-2 text-xs text-gray-400 dark:text-gray-600">
+		{$i18n.t('settings.admin.general.events.events.label')}
+	</div>
 
 	<div class="flex flex-col w-full justify-between gap-2.5">
 		<div class="flex w-full items-start justify-between gap-4">
 			<div class="min-w-0">
-				<div class="text-xs text-gray-600 dark:text-gray-400">{$i18n.t('Webhooks')}</div>
+				<div class="text-xs text-gray-600 dark:text-gray-400">
+					{$i18n.t('settings.admin.general.events.webhooks.label')}
+				</div>
 				<div class="mt-1.5 text-[0.6875rem] text-gray-400 dark:text-gray-600">
-					{$i18n.t(
-						'Send product events as JSON to external services. Chat destinations receive readable messages.'
-					)}
+					{$i18n.t('settings.admin.general.events.webhooks.description')}
 				</div>
 			</div>
 			<Tooltip content={$i18n.t('Add webhook')}>
 				<button
+					aria-label={$i18n.t('Add webhook')}
 					class="flex size-6 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-black/5 hover:text-gray-900 dark:text-gray-600 dark:hover:bg-white/5 dark:hover:text-white"
 					on:click={newWebhook}
 					type="button"
@@ -715,14 +723,17 @@
 
 		<div class="flex flex-col gap-1">
 			{#each webhooks as webhook}
-				<div class="flex w-full gap-2 items-center">
+				<div class="group/setting-row flex w-full gap-2 items-center">
 					<div
 						class="flex-1 min-w-0 flex gap-1.5 items-center {webhook.enabled ? '' : 'opacity-50'}"
 					>
 						<div class="outline-hidden w-full bg-transparent text-sm truncate">
-							<span class="font-normal">
+							<label
+								for={`webhook-${webhook.id}-control`}
+								class="font-normal text-gray-600 dark:text-gray-400 transition-colors duration-150 group-hover/setting-row:text-gray-900 group-focus-within/setting-row:text-gray-900 dark:group-hover/setting-row:text-white dark:group-focus-within/setting-row:text-white group-has-[button[id$=-control]:enabled]/setting-row:cursor-pointer group-has-[button[id$=-control]:disabled]/setting-row:cursor-not-allowed"
+							>
 								{webhook.id === 'default' ? $i18n.t('Default webhook') : webhook.name}
-							</span>
+							</label>
 							<span class="text-xs text-gray-500">
 								- {urlHost(webhook.url)} - {eventSummary(webhook)} - {targetSummary(webhook)}
 							</span>
@@ -732,6 +743,7 @@
 					<div class="flex gap-1 items-center">
 						<Tooltip content={$i18n.t('Configure')}>
 							<button
+								aria-label={$i18n.t('Configure')}
 								class="self-center p-1 bg-transparent hover:bg-gray-50/70 dark:hover:bg-gray-850/50 rounded-lg transition"
 								on:click={() => editWebhook(webhook)}
 								type="button"
@@ -742,6 +754,7 @@
 
 						<Tooltip content={webhook.enabled ? $i18n.t('Enabled') : $i18n.t('Disabled')}>
 							<Switch
+								id={`webhook-${webhook.id}-control`}
 								state={webhook.enabled}
 								on:change={(event) => {
 									toggleWebhook(webhook, event.detail);

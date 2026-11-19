@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import { embed, showControls, showEmbeds } from '$lib/stores';
+	import { embed, showTabs, showEmbeds } from '$lib/stores';
+	import { isValidHttpUrl } from '$lib/utils';
 
 	import CitationModal from './Citations/CitationModal.svelte';
 
@@ -43,13 +44,17 @@
 
 			if (citations[index]?.source?.embed_url) {
 				const embedUrl = citations[index].source.embed_url;
-				if (embedUrl) {
+				// The embed panel renders anything it cannot read as a URL as raw HTML
+				if (
+					typeof embedUrl === 'string' &&
+					(isValidHttpUrl(embedUrl) || embedUrl.startsWith('//'))
+				) {
 					if (readOnly) {
 						// Open in new tab if readOnly
 						window.open(embedUrl, '_blank');
 						return;
 					} else {
-						showControls.set(true);
+						showTabs.set(true);
 						showEmbeds.set(true);
 						embed.set({
 							url: embedUrl,
@@ -78,6 +83,11 @@
 
 		if (distances.length === 0) {
 			return false;
+		}
+
+		// A single distance cannot be an outlier
+		if (distances.length === 1) {
+			return true;
 		}
 
 		if (
@@ -114,7 +124,7 @@
 				}
 
 				if (id.startsWith('http://') || id.startsWith('https://')) {
-					_source = { ..._source, name: id, url: id };
+					_source = { ..._source, name: metadata?.external ? _source.name : id, url: id };
 				}
 
 				const existingSource = acc.find((item) => item.id === id);
@@ -216,7 +226,7 @@
 				<button
 					id={`source-${id}-${idx + 1}`}
 					aria-label={$i18n.t('View source: {{name}}', {
-						name: decodeString(citation.source.name)
+						name: `${idx + 1} ${decodeString(citation.source.name)}`
 					})}
 					class="no-toggle outline-hidden flex dark:text-gray-300 bg-transparent text-gray-600 rounded-xl gap-1.5 items-center"
 					on:click={() => {

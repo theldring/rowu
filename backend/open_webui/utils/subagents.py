@@ -3,21 +3,24 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
+import weakref
 from datetime import timedelta
 from uuid import uuid4
 
 from fastapi import Request
 from fastapi.security import HTTPAuthorizationCredentials
-from open_webui.internal.db import get_async_db
 from open_webui.models.chat_messages import ChatMessages
-from open_webui.models.chats import Chat, ChatForm, Chats
+from open_webui.models.chats import ChatForm, Chats
 from open_webui.models.config import Config
+from open_webui.models.auths import Auths
 from open_webui.models.users import UserModel, Users
 from open_webui.tasks import create_task, has_active_tasks
-from open_webui.utils.auth import create_token
+from open_webui.utils.auth import VERIFIED_USER_ROLES, create_token
 from open_webui.utils.json_codec import JSONCodec
-from open_webui.utils.misc import get_message_list
-from sqlalchemy import select
+from open_webui.utils.misc import add_or_update_system_message, get_message_list, is_raster_image_content_type
+from open_webui.utils.models import get_filtered_models
+from open_webui.utils.tool_calling import strip_tool_approval_prompt
+from open_webui.utils.tool_search import strip_deferred_tools_manifest
 from starlette.datastructures import Headers
 
 DEFAULT_SUBAGENT_SYSTEM_PROMPT = """You are a sub-agent working on a specific task assigned by the lead agent.
@@ -41,10 +44,26 @@ MUTATING_MEMORY_TOOLS = {
 _background_active: set[str] = set()
 _background_lock = asyncio.Lock()
 _foreground_semaphore: asyncio.Semaphore | None = None
-_parent_locks: dict[str, asyncio.Lock] = {}
+_parent_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
-def _build_request(source: Request, user_id: str, *, internal: bool) -> Request:
+async def get_subagent_models(request: Request, user: UserModel, model: dict) -> list[dict]:
+    subagents = (model.get('info', {}).get('meta') or {}).get('subagents') or {}
+    model_ids = subagents.get('model_ids') or []
+    if not model_ids:
+        return []
+    candidates = [model for model_id, model in request.app.state.MODELS.items() if model_id in model_ids]
+    return [
+        {
+            'id': model['id'],
+            'name': model.get('name', model['id']),
+            'description': (model.get('info', {}).get('meta') or {}).get('description') or '',
+        }
+        for model in await get_filtered_models(candidates, user)
+    ]
+
+
+async def _build_request(source: Request, user_id: str, *, internal: bool) -> Request:
     scope = {
         'type': 'http',
         'asgi': {'version': '3.0', 'spec_version': '2.0'},
@@ -52,14 +71,17 @@ def _build_request(source: Request, user_id: str, *, internal: bool) -> Request:
         'path': '/api/v1/subagents/internal',
         'query_string': b'',
         'headers': Headers({}).raw,
-        'client': ('127.0.0.1', 0),
+        'client': ('', 0),
         'server': ('127.0.0.1', 80),
         'scheme': 'http',
         'app': source.app,
     }
     request = Request(scope)
+    auth = await Auths.get_auth_by_id(user_id)
+    if auth is None or not auth.active:
+        raise ValueError('Subagent owner is no longer active')
     token = create_token(
-        data={'id': user_id, 'typ': 'subagent'},
+        data={'id': user_id, 'typ': 'subagent', 'session_stamp': auth.session_stamp},
         expires_delta=timedelta(hours=1),
     )
     request.state.token = HTTPAuthorizationCredentials(scheme='Bearer', credentials=token)
@@ -69,31 +91,95 @@ def _build_request(source: Request, user_id: str, *, internal: bool) -> Request:
     return request
 
 
+async def queue_user_message(
+    request: Request, chat_id: str, user: UserModel, user_message: dict, parent_id: str
+) -> bool:
+    """Hold a message sent while its reply is running. The reply ends at its next step and this is answered next."""
+    if not user_message.get('id') or not await has_active_tasks(request.app.state.redis, chat_id):
+        return False
+    # Only a reply still being written holds messages. Checked before locking: the turn that answers
+    # held messages is started under this lock, and its own reply is already finished.
+    reply = await Chats.get_message_by_id_and_message_id(chat_id, parent_id)
+    if not reply or reply.get('role') != 'assistant' or reply.get('done') is not False:
+        return False
+    async with _parent_locks.setdefault(chat_id, asyncio.Lock()):
+        # Checked under the lock the reply's own cleanup takes, so the message can't be left unanswered.
+        if not await has_active_tasks(request.app.state.redis, chat_id):
+            return False
+        async with Chats._chat_transaction(chat_id) as (_, chat):
+            if not chat or chat.user_id != user.id:
+                return False
+            history = copy.deepcopy((chat.chat or {}).get('history') or {})
+            messages = history.get('messages') or {}
+            reply = messages.get(parent_id)
+            if not reply:
+                return False
+            message = {
+                'id': user_message['id'],
+                'parentId': parent_id,
+                'childrenIds': [],
+                'role': 'user',
+                'content': user_message.get('content', ''),
+                **({'files': user_message['files']} if user_message.get('files') else {}),
+                'model': reply.get('model'),
+                'user_id': user.id,
+                'user': {'id': user.id, 'name': user.name},
+                'meta': {'status': 'pending'},
+                'timestamp': int(time.time()),
+            }
+            messages[message['id']] = message
+            reply.setdefault('childrenIds', []).append(message['id'])
+            history['messages'] = messages
+            chat.chat = {**(chat.chat or {}), 'history': history}
+            chat.updated_at = int(time.time())
+        await ChatMessages.upsert_message(message['id'], chat_id, user.id, message)
+    return True
+
+
+def get_pending_run(metadata: dict, model_id: str | None = None) -> dict:
+    """The settings a turn started for pending messages takes from the turn before it."""
+    return {
+        'model_id': metadata.get('model_id') or model_id,
+        'session_id': metadata.get('session_id'),
+        'tool_ids': metadata.get('tool_ids') or [],
+        'skill_ids': metadata.get('skill_ids') or [],
+        'chat_context': metadata.get('chat_context'),
+        'filter_ids': metadata.get('filter_ids') or [],
+        'terminal_id': metadata.get('terminal_id'),
+        'features': metadata.get('features') or {},
+        'variables': metadata.get('variables') or {},
+    }
+
+
 async def process_pending_internal_messages(
     source_request: Request,
     parent_chat_id: str,
     user_id: str,
     run: dict,
+    reply_id: str | None = None,
 ) -> None:
+    """Answer pending messages once the chat is idle. With reply_id, answer only the messages queued under that
+    reply as soon as it is saved, without waiting for its follow-ups, title and other background work."""
     lock = _parent_locks.setdefault(parent_chat_id, asyncio.Lock())
-    while await has_active_tasks(source_request.app.state.redis, parent_chat_id):
-        await asyncio.sleep(0.25)
+    if reply_id is None:
+        while await has_active_tasks(source_request.app.state.redis, parent_chat_id):
+            await asyncio.sleep(0.25)
+    else:
+        # The turn started below asks whether its parent reply is still running, without taking this lock.
+        reply = await Chats.get_message_by_id_and_message_id(parent_chat_id, reply_id)
+        if not reply or reply.get('done') is not True:
+            return
 
     async with lock:
-        if await has_active_tasks(source_request.app.state.redis, parent_chat_id):
+        if reply_id is None and await has_active_tasks(source_request.app.state.redis, parent_chat_id):
             return
 
         user = await Users.get_user_by_id(user_id)
-        if not user:
+        if not user or user.role not in VERIFIED_USER_ROLES:
             return
 
-        async with get_async_db() as db:
-            stmt = select(Chat).where(Chat.id == parent_chat_id, Chat.user_id == user_id)
-            if db.bind.dialect.name == 'postgresql':
-                stmt = stmt.with_for_update()
-            result = await db.execute(stmt)
-            chat = result.scalar_one_or_none()
-            if not chat:
+        async with Chats._chat_transaction(parent_chat_id) as (_, chat):
+            if not chat or chat.user_id != user_id:
                 return
 
             history = copy.deepcopy((chat.chat or {}).get('history') or {})
@@ -111,21 +197,43 @@ async def process_pending_internal_messages(
                         and meta.get('status') in (None, 'pending')
                     )
                     or (meta.get('internal') is True and meta.get('type') == 'timer')
+                    # The user's own message, held while its reply was running.
+                    or (meta.get('internal') is not True and meta.get('status') == 'pending')
                 )
             ]
+            if reply_id is not None:
+                pending = [
+                    message
+                    for message in pending
+                    if message.get('parentId') == reply_id and (message.get('meta') or {}).get('internal') is not True
+                ]
             if not pending:
                 return
 
             first = pending[0]
             first_meta = first.get('meta') or {}
-            kind = 'timer' if first_meta.get('internal') is True and first_meta.get('type') == 'timer' else 'subagent'
+            kind = (
+                'timer'
+                if first_meta.get('internal') is True and first_meta.get('type') == 'timer'
+                else 'queued'
+                if first_meta.get('internal') is not True
+                else 'subagent'
+            )
             parent_id = first.get('parentId')
             if kind == 'timer' and first_meta.get('timer_id'):
                 timer = await Chats.get_chat_by_id(first_meta['timer_id'])
-                run = {**run, **(((timer.meta or {}).get('run') if timer else None) or {})}
+                timer_run = ((timer.meta or {}).get('run') if timer else None) or {}
+                if timer_run:
+                    run = {**run, **timer_run, 'chat_context': timer_run.get('chat_context')}
             model_id = first.get('model') or run['model_id']
             if kind == 'timer':
                 batch = [first]
+            elif kind == 'queued':
+                batch = [
+                    message
+                    for message in pending
+                    if message.get('parentId') == parent_id and (message.get('meta') or {}).get('internal') is not True
+                ]
             else:
                 batch = [
                     message
@@ -149,6 +257,9 @@ async def process_pending_internal_messages(
                     combined_meta['timer_id'] = timer_ids[0]
                 elif timer_ids:
                     combined_meta['timer_ids'] = timer_ids
+            elif kind == 'queued':
+                # The user's own words, answered as an ordinary message.
+                combined_meta = {}
             else:
                 delegation_ids = [
                     message['meta']['delegation_id']
@@ -186,7 +297,6 @@ async def process_pending_internal_messages(
 
             assistant_message_id = str(uuid4())
             message_list = get_message_list(messages, parent_id)
-            system_prompt = run.get('system_prompt')
             user_message = {
                 'id': user_message_id,
                 'parentId': parent_id,
@@ -197,6 +307,11 @@ async def process_pending_internal_messages(
                 'meta': combined_meta,
                 'timestamp': int(time.time()),
             }
+            if kind == 'queued':
+                user_message.update(user_id=user.id, user={'id': user.id, 'name': user.name})
+                held_files = [file for message in batch for file in message.get('files') or []]
+                if held_files:
+                    user_message['files'] = held_files
             assistant_message = {
                 'id': assistant_message_id,
                 'parentId': user_message_id,
@@ -219,8 +334,8 @@ async def process_pending_internal_messages(
             history['messages'] = messages
             history['currentId'] = assistant_message_id
             chat.chat = {**(chat.chat or {}), 'history': history}
+            chat.current_message_id = assistant_message_id
             chat.updated_at = int(time.time())
-            await db.commit()
 
         if removed_ids:
             await ChatMessages.delete_message_ids_by_chat_id(parent_chat_id, removed_ids)
@@ -239,10 +354,20 @@ async def process_pending_internal_messages(
             room=f'user:{user.id}',
         )
 
+        chat_context = copy.deepcopy(run.get('chat_context') or {})
+        # Runs saved before chat_context was introduced only have the assembled prompt.
+        if run.get('chat_context') is None and run.get('system_prompt'):
+            chat_context['messages'] = [
+                {
+                    'role': 'system',
+                    'content': strip_tool_approval_prompt(strip_deferred_tools_manifest(run['system_prompt'])),
+                }
+            ]
         form_data = {
             'model': model_id,
+            'params': chat_context.get('params') or {},
             'messages': [
-                *([{'role': 'system', 'content': system_prompt}] if system_prompt else []),
+                *chat_context.get('messages', []),
                 *message_list,
                 {'role': 'user', 'content': combined_content},
             ],
@@ -257,13 +382,24 @@ async def process_pending_internal_messages(
             'skill_ids': run.get('skill_ids') or [],
             'filter_ids': run.get('filter_ids') or [],
             'features': run.get('features') or {},
-            'files': run.get('files') or [],
+            'files': [
+                *(run.get('files') or []),
+                # Documents attached to held messages; their images reach the model with the message itself.
+                *[
+                    file
+                    for file in user_message.get('files') or []
+                    if file.get('type') in ('doc', 'text', 'note', 'chat', 'collection', 'folder')
+                    or (file.get('type') == 'file' and not is_raster_image_content_type(file.get('content_type')))
+                ],
+            ],
             'variables': run.get('variables') or {},
+            'chat_variables': chat_context.get('chat_variables'),
         }
         if run.get('terminal_id'):
             form_data['terminal_id'] = run['terminal_id']
 
-        request = _build_request(source_request, user.id, internal=False)
+        request = await _build_request(source_request, user.id, internal=False)
+        request.state.chat_context = chat_context
         await source_request.app.state.CHAT_COMPLETION_HANDLER(request, form_data, user=user)
 
 
@@ -273,6 +409,7 @@ async def delegate(
     background: bool,
     *,
     file_ids: list[str] | None = None,
+    model_id: str | None = None,
     request: Request,
     user_data: dict,
     metadata: dict,
@@ -295,13 +432,21 @@ async def delegate(
         'subagents.max_output',
         'subagents.system_prompt',
     )
-    max_concurrent = int(config.get('subagents.max_concurrent') or 20)
-    max_async = int(config.get('subagents.max_async') or 20)
-    max_iterations = int(config.get('subagents.max_iterations') or 30)
-    max_output = int(config.get('subagents.max_output') or 30_000)
-    if max_concurrent != -1:
+    max_concurrent = config.get('subagents.max_concurrent')
+    max_concurrent = int(max_concurrent) if max_concurrent else None
+    max_async = config.get('subagents.max_async')
+    max_async = int(max_async) if max_async else None
+    max_iterations = config.get('subagents.max_iterations')
+    max_iterations = int(max_iterations) if max_iterations else None
+    max_output = config.get('subagents.max_output')
+    max_output = int(max_output) if max_output else None
+    if max_concurrent == -1:
+        max_concurrent = None
+    elif max_concurrent is not None:
         max_concurrent = max(1, max_concurrent)
-    if max_async != -1:
+    if max_async == -1:
+        max_async = None
+    elif max_async is not None:
         max_async = max(1, max_async)
 
     if background and not config.get('subagents.background_enabled'):
@@ -314,60 +459,74 @@ async def delegate(
         and await Config.get('code_interpreter.engine', 'pyodide') != 'jupyter'
     ):
         features.pop('code_interpreter')
+    folder_id = await Chats.get_chat_folder_id(parent_chat_id, user_data['id']) or metadata.get('folder_id')
     run = {
         'model_id': metadata.get('model_id') or (metadata.get('model') or {}).get('id'),
         'session_id': metadata.get('session_id'),
         'tool_ids': copy.deepcopy(metadata.get('tool_ids') or []),
         'skill_ids': copy.deepcopy(metadata.get('skill_ids') or []),
-        'system_prompt': metadata.get('system_prompt'),
-        'tool_servers': [] if background else copy.deepcopy(metadata.get('tool_servers') or []),
+        'chat_context': copy.deepcopy(metadata.get('chat_context') or {}),
         'filter_ids': copy.deepcopy(metadata.get('filter_ids') or []),
         'terminal_id': metadata.get('terminal_id'),
         'features': features,
         'files': copy.deepcopy(metadata.get('files') or []),
         'variables': copy.deepcopy(metadata.get('variables') or {}),
-        'direct': bool(metadata.get('direct')),
+        'folder_id': folder_id,
     }
     if not run.get('model_id'):
         return 'Error: model context is required.'
-    if run.get('direct'):
-        return 'Error: sub-agents are unavailable for direct connections.'
+    if model_id:
+        available_models = await get_subagent_models(request, UserModel(**user_data), metadata.get('model') or {})
+        available_ids = [model['id'] for model in available_models]
+        if model_id not in available_ids:
+            return (
+                f'Error: model {model_id} is not available for sub-agents. '
+                f'Available models: {", ".join(available_ids) or "none"}. '
+                'Omit model_id to use the current model.'
+            )
+    model_id = model_id or run['model_id']
+    delegated_files = []
     if file_ids:
         requested_file_ids = {str(file_id) for file_id in file_ids if file_id}
-        run['files'] = [
-            copy.deepcopy(file)
-            for file in metadata.get('files') or []
-            if str(file.get('id') or '') in requested_file_ids
-            or str(file.get('url') or '') in requested_file_ids
-            or (isinstance(file.get('file'), dict) and str(file.get('file', {}).get('id') or '') in requested_file_ids)
+        chat_messages = await Chats.get_messages_map_by_chat_id(parent_chat_id) or {}
+        # Photos are left out of the request's files, so also look on the chat's messages.
+        attached_files = [
+            *(metadata.get('files') or []),
+            *(
+                file
+                for message in chat_messages.values()
+                if message.get('role') == 'user'
+                for file in message.get('files') or []
+                if file.get('type') == 'image' or is_raster_image_content_type(file.get('content_type'))
+            ),
         ]
-        found_file_ids = {
-            str(value)
-            for file in run['files']
-            for value in (
-                file.get('id'),
-                file.get('url'),
-                file.get('file', {}).get('id') if isinstance(file.get('file'), dict) else None,
-            )
-            if value
-        }
+        found_file_ids = set()
+        for file in attached_files:
+            nested_file = file.get('file') if isinstance(file.get('file'), dict) else {}
+            keys = {str(value) for value in (file.get('id'), file.get('url'), nested_file.get('id')) if value}
+            if keys & requested_file_ids and not keys & found_file_ids:
+                delegated_files.append(copy.deepcopy(file))
+                found_file_ids |= keys
         missing_file_ids = sorted(requested_file_ids - found_file_ids)
         if missing_file_ids:
             return f'Error: file_ids not attached or unavailable: {", ".join(missing_file_ids)}'
-    else:
-        run['files'] = []
+    run['files'] = [
+        file
+        for file in delegated_files
+        if file.get('type') != 'image' and not is_raster_image_content_type(file.get('content_type'))
+    ]
 
     delegation_id = f'deleg_{uuid4().hex[:8]}'
     foreground_semaphore = None
     if background:
         async with _background_lock:
-            if max_async != -1 and len(_background_active) >= max_async:
+            if max_async is not None and len(_background_active) >= max_async:
                 return (
                     f'Error: Async subagent capacity reached ({max_async} running). '
                     'Wait for one to finish or increase subagents.max_async.'
                 )
             _background_active.add(delegation_id)
-    elif max_concurrent != -1:
+    elif max_concurrent is not None:
         if _foreground_semaphore is None:
             _foreground_semaphore = asyncio.Semaphore(max_concurrent)
         foreground_semaphore = _foreground_semaphore
@@ -380,7 +539,7 @@ async def delegate(
         user_message_id = str(uuid4())
         assistant_message_id = str(uuid4())
         prompt = f'{task}\n\n## Context\n{context}' if context else task
-        prompt_files = copy.deepcopy(run.get('files') or [])
+        prompt_files = delegated_files
         user_message = {
             'id': user_message_id,
             'parentId': None,
@@ -388,7 +547,7 @@ async def delegate(
             'role': 'user',
             'content': prompt,
             'timestamp': int(time.time()),
-            'models': [run['model_id']],
+            'models': [model_id],
             **({'files': prompt_files} if prompt_files else {}),
         }
         chat = await Chats.insert_new_chat(
@@ -398,7 +557,7 @@ async def delegate(
                 chat={
                     'id': chat_id,
                     'title': f'Sub-agent: {task[:60]}',
-                    'models': [run['model_id']],
+                    'models': [model_id],
                     'history': {
                         'currentId': assistant_message_id,
                         'messages': {
@@ -410,7 +569,7 @@ async def delegate(
                                 'role': 'assistant',
                                 'content': '',
                                 'done': False,
-                                'model': run['model_id'],
+                                'model': model_id,
                                 'timestamp': int(time.time()),
                             },
                         },
@@ -447,25 +606,21 @@ async def delegate(
 
     async def run_reserved() -> dict:
         try:
-            child_request = _build_request(request, user.id, internal=True)
+            child_request = await _build_request(request, user.id, internal=True)
             child_request.state.max_tool_call_iterations = max_iterations
-            parent_system_prompt = run.get('system_prompt') or ''
+            chat_context = copy.deepcopy(run.get('chat_context') or {})
+            child_request.state.chat_context = chat_context
             subagent_system_prompt = (
                 str(config.get('subagents.system_prompt') or '').strip() or DEFAULT_SUBAGENT_SYSTEM_PROMPT
             )
             form_data = {
-                'model': run['model_id'],
-                'messages': [
-                    {
-                        'role': 'system',
-                        'content': (
-                            f'{parent_system_prompt}\n\n{subagent_system_prompt}'
-                            if parent_system_prompt
-                            else subagent_system_prompt
-                        ),
-                    },
-                    {'role': 'user', 'content': prompt},
-                ],
+                'model': model_id,
+                'params': chat_context.get('params') or {},
+                'messages': add_or_update_system_message(
+                    subagent_system_prompt,
+                    [*chat_context.get('messages', []), {'role': 'user', 'content': prompt}],
+                    append=True,
+                ),
                 'stream': True,
                 'chat_id': chat_id,
                 'id': assistant_message_id,
@@ -479,11 +634,11 @@ async def delegate(
                 'features': run.get('features') or {},
                 'files': run.get('files') or [],
                 'variables': run.get('variables') or {},
+                'chat_variables': chat_context.get('chat_variables'),
+                'folder_id': run.get('folder_id'),
             }
             if run.get('terminal_id'):
                 form_data['terminal_id'] = run['terminal_id']
-            if run.get('tool_servers'):
-                form_data['tool_servers'] = run['tool_servers']
             await request.app.state.CHAT_COMPLETION_HANDLER(child_request, form_data, user=user)
             message = await Chats.get_message_by_id_and_message_id(chat_id, assistant_message_id)
             if not message:
@@ -508,9 +663,11 @@ async def delegate(
                     for part in item.get('content') or []
                     if part.get('type') == 'output_text'
                 )
-            if len(summary) > max_output:
+            if max_output is not None and len(summary) > max_output:
                 summary = f'{summary[:max_output]}\n\n[output truncated]'
             error = message.get('error')
+            if isinstance(error, dict):
+                error = error.get('content') or 'Sub-agent failed.'
             return {
                 'status': 'error' if error else 'completed',
                 'summary': summary or ('Sub-agent produced no output.' if not error else ''),
@@ -600,13 +757,8 @@ async def delegate(
 
         lock = _parent_locks.setdefault(parent_chat_id, asyncio.Lock())
         async with lock:
-            async with get_async_db() as db:
-                stmt = select(Chat).where(Chat.id == parent_chat_id, Chat.user_id == user.id)
-                if db.bind.dialect.name == 'postgresql':
-                    stmt = stmt.with_for_update()
-                result_row = await db.execute(stmt)
-                parent = result_row.scalar_one_or_none()
-                if not parent:
+            async with Chats._chat_transaction(parent_chat_id) as (_, parent):
+                if not parent or parent.user_id != user.id:
                     if cancelled:
                         raise asyncio.CancelledError
                     return result
@@ -614,18 +766,25 @@ async def delegate(
                 updated_chat = copy.deepcopy(parent.chat or {})
                 updated_history = updated_chat.setdefault('history', {})
                 updated_messages = updated_history.setdefault('messages', {})
-                done_assistants = [
+                parent_message = updated_messages.get(parent_message_id)
+                is_active = await has_active_tasks(request.app.state.redis, parent_chat_id)
+                assistants = [
                     message
-                    for message in updated_messages.values()
-                    if message.get('role') == 'assistant' and message.get('done') is not False
+                    for message_id, message in updated_messages.items()
+                    if message.get('role') == 'assistant'
+                    and (is_active or message.get('done') is not False)
+                    and (
+                        parent_message is None
+                        or any(entry is parent_message for entry in get_message_list(updated_messages, message_id))
+                    )
                 ]
                 result_parent_id = (
-                    max(done_assistants, key=lambda message: message.get('timestamp', 0)).get('id')
-                    if done_assistants
+                    max(assistants, key=lambda message: message.get('timestamp', 0)).get('id')
+                    if assistants
                     else parent_message_id
                 )
                 pending_message['parentId'] = result_parent_id
-                if await has_active_tasks(request.app.state.redis, parent_chat_id):
+                if is_active:
                     pending_message['meta']['status'] = 'pending'
                 updated_messages[pending_message_id] = pending_message
                 if result_parent_id and result_parent_id in updated_messages:
@@ -635,7 +794,6 @@ async def delegate(
                 updated_history['messages'] = updated_messages
                 parent.chat = {**(parent.chat or {}), **updated_chat, 'history': updated_history}
                 parent.updated_at = int(time.time())
-                await db.commit()
 
             await ChatMessages.upsert_message(
                 message_id=pending_message_id,
@@ -698,5 +856,8 @@ async def delegate(
         return f'Error: {exc}'
 
     if result.get('status') != 'completed':
-        return f'Error: {result.get("error") or "sub-agent failed."}'
+        error_text = f'Error: {result.get("error") or "sub-agent failed."}'
+        if result.get('summary'):
+            return f'{error_text}\nPartial output:\n{result["summary"]}'
+        return error_text
     return result.get('summary') or 'Sub-agent produced no output.'

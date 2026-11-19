@@ -3,17 +3,26 @@
 	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
 
-	import { config, user, models as _models, temporaryChatEnabled } from '$lib/stores';
+	import { config, user } from '$lib/stores';
 	import { onMount, getContext } from 'svelte';
 
 	import { blur, fade } from 'svelte/transition';
 
 	import Suggestions from './Suggestions.svelte';
 	import { sanitizeResponseContent } from '$lib/utils';
+	import {
+		resolveLocalizedModelDescription,
+		resolveLocalizedModelName,
+		resolveLocalizedModelPromptSuggestions,
+		resolveLocalizedPromptSuggestions
+	} from '$lib/utils/localizedContent';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import EyeSlash from '$lib/components/icons/EyeSlash.svelte';
+	import { getChatContext } from '$lib/components/chat/context';
 
-	const i18n = getContext('i18n');
+	const { models: _models, temporary } = getChatContext();
+
+	const i18n: any = getContext('i18n');
 
 	export let modelIds = [];
 	export let models = [];
@@ -23,12 +32,30 @@
 
 	let mounted = false;
 	let selectedModelIdx = 0;
+	let selectedModel;
+	let selectedModelName = '';
+	let selectedModelDescription = '';
+	let selectedSuggestionPrompts = [];
 
 	$: if (modelIds.length > 0) {
 		selectedModelIdx = models.length - 1;
 	}
 
 	$: models = modelIds.map((id) => $_models.find((m) => m.id === id));
+	$: selectedModel = atSelectedModel ?? models[selectedModelIdx];
+	$: selectedModelName = resolveLocalizedModelName(selectedModel, $i18n.language);
+	$: selectedModelDescription =
+		$config?.license_metadata?.chat_placeholder_description ||
+		resolveLocalizedModelDescription(selectedModel, $i18n.language);
+	$: selectedSuggestionPrompts =
+		resolveLocalizedModelPromptSuggestions(atSelectedModel, $i18n.language) ??
+		resolveLocalizedModelPromptSuggestions(models[selectedModelIdx], $i18n.language) ??
+		resolveLocalizedPromptSuggestions(
+			$config?.default_prompt_suggestions,
+			$config?.default_prompt_suggestions_i18n ?? {},
+			$i18n.language,
+			(key) => $i18n.t(key)
+		);
 
 	onMount(() => {
 		mounted = true;
@@ -41,6 +68,11 @@
 			<div class="flex -space-x-4 mb-0.5" in:fade={{ duration: 200 }}>
 				{#each models as model, modelIdx}
 					<button
+						aria-hidden={models.length <= 1}
+						tabindex={models.length > 1 ? 0 : -1}
+						aria-label={$i18n.t('Get information on {{name}} in the UI', {
+							name: resolveLocalizedModelName(model, $i18n.language)
+						})}
 						on:click={() => {
 							selectedModelIdx = modelIdx;
 						}}
@@ -48,17 +80,16 @@
 						<Tooltip
 							content={DOMPurify.sanitize(
 								marked.parse(
-									sanitizeResponseContent(
-										models[selectedModelIdx]?.info?.meta?.description ?? ''
-									).replaceAll('\n', '<br>')
+									sanitizeResponseContent(selectedModelDescription).replaceAll('\n', '<br>')
 								)
 							)}
+							allowHTML={true}
 							placement="right"
 						>
 							<img
 								src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model?.id}&lang=${$i18n.language}`}
 								class=" size-[2.7rem] rounded-full"
-								alt="logo"
+								alt=""
 								draggable="false"
 								on:error={(e) => {
 									// LICENSE covers this Open WebUI fallback logo.
@@ -73,7 +104,7 @@
 			</div>
 		</div>
 
-		{#if $temporaryChatEnabled}
+		{#if $temporary}
 			<Tooltip
 				content={$i18n.t("This chat won't appear in history and your messages will not be saved.")}
 				className="w-full flex justify-start mb-0.5"
@@ -89,30 +120,28 @@
 			class=" mt-2 mb-4 text-3xl text-gray-800 dark:text-gray-100 text-left flex items-center gap-4"
 		>
 			<div>
-				<div class=" capitalize line-clamp-1" in:fade={{ duration: 200 }}>
-					{#if models[selectedModelIdx]?.name}
-						{models[selectedModelIdx]?.name}
+				<h2 class=" capitalize line-clamp-1" in:fade={{ duration: 200 }}>
+					{#if selectedModelName}
+						{selectedModelName}
 					{:else}
 						{$i18n.t('Hello, {{name}}', { name: $user?.name })}
 					{/if}
-				</div>
+				</h2>
 
 				<div in:fade={{ duration: 200, delay: 200 }}>
-					{#if models[selectedModelIdx]?.info?.meta?.description ?? null}
+					{#if selectedModelDescription}
 						<div
 							class="mt-0.5 text-base font-normal text-gray-500 dark:text-gray-400 line-clamp-3 markdown"
 						>
 							{@html DOMPurify.sanitize(
 								marked.parse(
-									sanitizeResponseContent(
-										models[selectedModelIdx]?.info?.meta?.description
-									).replaceAll('\n', '<br>')
+									sanitizeResponseContent(selectedModelDescription).replaceAll('\n', '<br>')
 								)
 							)}
 						</div>
-						{#if models[selectedModelIdx]?.info?.meta?.user}
+						{#if models[selectedModelIdx]?.info?.meta?.user && (!models[selectedModelIdx]?.info?.meta?.user.community || $config?.features.enable_community_sharing)}
 							<div class="mt-0.5 text-sm font-normal text-gray-400 dark:text-gray-500">
-								By
+								{$i18n.t('By')}
 								{#if models[selectedModelIdx]?.info?.meta?.user.community}
 									<a
 										href="https://openwebui.com/m/{models[selectedModelIdx]?.info?.meta?.user
@@ -138,10 +167,7 @@
 		<div class=" w-full" in:fade={{ duration: 200, delay: 300 }}>
 			<Suggestions
 				className="grid grid-cols-2"
-				suggestionPrompts={atSelectedModel?.info?.meta?.suggestion_prompts ??
-					models[selectedModelIdx]?.info?.meta?.suggestion_prompts ??
-					$config?.default_prompt_suggestions ??
-					[]}
+				suggestionPrompts={selectedSuggestionPrompts}
 				{onSelect}
 			/>
 		</div>

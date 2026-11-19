@@ -13,6 +13,8 @@
 	import CheckCircle from '$lib/components/icons/CheckCircle.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
+	import MCPApp, { type MCPAppEmbed } from '$lib/components/chat/Messages/MCPApp.svelte';
+	import { agentViewName, type AgentView } from '$lib/components/chat/Messages/agentViews';
 
 	import { settings } from '$lib/stores';
 
@@ -22,9 +24,12 @@
 	export let tokens: Array<{
 		summary?: string;
 		text?: string;
+		view?: AgentView | null;
 		attributes?: {
 			type?: string;
 			name?: string;
+			display_label?: string;
+			running_label?: string;
 			done?: string;
 			id?: string;
 			status?: string;
@@ -35,7 +40,7 @@
 	}> = [];
 
 	export let messageDone = true;
-	export let allowEmbeds = true;
+	export let allowEmbeds = false;
 	export let compactPreview = false;
 	export let resolvable = false;
 	export let resolvingCallId = '';
@@ -99,14 +104,18 @@
 	$: pendingToolTokens = tokens.filter(
 		(t) => t?.attributes?.type === 'tool_calls' && t?.attributes?.status === 'pending'
 	);
-	$: hasActiveToolCalls = tokens.some(
-		(t) =>
-			t?.attributes?.type === 'tool_calls' &&
-			t?.attributes?.status !== 'rejected' &&
-			t?.attributes?.status !== 'failed' &&
-			t?.attributes?.status !== 'incomplete' &&
-			t?.attributes?.done !== 'true'
-	);
+	$: hasActiveDetails = tokens.some((token) => {
+		const attributes = token?.attributes;
+		if (attributes?.type === 'tool_calls') {
+			return (
+				attributes.status !== 'rejected' &&
+				attributes.status !== 'failed' &&
+				attributes.status !== 'incomplete' &&
+				attributes.done !== 'true'
+			);
+		}
+		return !messageDone && attributes?.done && attributes.done !== 'true';
+	});
 	$: hasRejected = tokens.some(
 		(t) => t?.attributes?.type === 'tool_calls' && t?.attributes?.status === 'rejected'
 	);
@@ -123,7 +132,7 @@
 	$: allEmbeds = (() => {
 		if (!allowEmbeds) return [];
 
-		const result: Array<{ name: string; embed: string; args: string }> = [];
+		const result: Array<{ name: string; embed: string | MCPAppEmbed; args: string }> = [];
 		for (const t of tokens) {
 			if (t?.attributes?.type !== 'tool_calls') continue;
 			const raw = decode(t.attributes?.embeds ?? '');
@@ -143,14 +152,74 @@
 		return result;
 	})();
 
+	// Agent tool calls read as what they did ("Ran 2 commands, Read 3 files").
+	$: actionText = (() => {
+		const views = tokens.flatMap((t) => (t?.view ? [t.view] : []));
+		if (!views.length) return '';
+		const count = (kind: AgentView['kind']) => views.filter((view) => view.kind === kind).length;
+		const unique = (paths: string[]) => new Set(paths).size;
+		const commands = count('command');
+		const edited = unique(
+			views.flatMap((view) => (view.kind === 'edit' ? view.files.map((f) => f.path) : []))
+		);
+		const read = unique(views.flatMap((view) => (view.kind === 'read' ? view.paths : [])));
+		const searches = count('search');
+		const listed = count('list');
+		const webSearches = count('web');
+		const fetched = count('fetch');
+
+		const parts = [];
+		if (commands)
+			parts.push(
+				commands === 1
+					? $i18n.t('Ran 1 command')
+					: $i18n.t('Ran {{COUNT}} commands', { COUNT: commands })
+			);
+		if (edited)
+			parts.push(
+				edited === 1
+					? $i18n.t('Edited 1 file')
+					: $i18n.t('Edited {{COUNT}} files', { COUNT: edited })
+			);
+		if (read)
+			parts.push(
+				read === 1 ? $i18n.t('Read 1 file') : $i18n.t('Read {{COUNT}} files', { COUNT: read })
+			);
+		if (searches)
+			parts.push(
+				searches === 1
+					? $i18n.t('Searched code')
+					: $i18n.t('Searched code {{COUNT}} times', { COUNT: searches })
+			);
+		if (listed)
+			parts.push(
+				listed === 1
+					? $i18n.t('Listed 1 directory')
+					: $i18n.t('Listed {{COUNT}} directories', { COUNT: listed })
+			);
+		if (webSearches)
+			parts.push(
+				webSearches === 1
+					? $i18n.t('Searched the web')
+					: $i18n.t('Searched the web {{COUNT}} times', { COUNT: webSearches })
+			);
+		if (fetched)
+			parts.push(
+				fetched === 1
+					? $i18n.t('Fetched 1 page')
+					: $i18n.t('Fetched {{COUNT}} pages', { COUNT: fetched })
+			);
+		return parts.join(', ');
+	})();
+
 	$: summaryText = (() => {
 		const parts = [];
 
 		if (toolCallCount > 0) {
-			// Group by tool name and show counts
+			// Other tools are counted by name.
 			const nameCounts: Record<string, number> = {};
 			tokens
-				.filter((t) => t?.attributes?.type === 'tool_calls')
+				.filter((t) => t?.attributes?.type === 'tool_calls' && !t?.view)
 				.forEach((t) => {
 					const name = t?.attributes?.name ?? 'tool';
 					nameCounts[name] = (nameCounts[name] || 0) + 1;
@@ -174,7 +243,28 @@
 		return detail;
 	})();
 
-	$: prefixText = hasActiveToolCalls ? $i18n.t('Exploring') : $i18n.t('Explored');
+	$: prefixText = hasActiveDetails ? $i18n.t('Exploring') : $i18n.t('Explored');
+	$: toolLabels = tokens
+		.filter((token) => token.attributes?.type === 'tool_calls')
+		.map((token) =>
+			['pending', 'queued', 'requires_approval', 'incomplete'].includes(
+				token.attributes?.status ?? ''
+			)
+				? ''
+				: token.attributes?.done === 'true'
+					? token.attributes?.display_label
+					: token.attributes?.running_label
+		);
+	$: toolNames = tokens
+		.filter((token) => token.attributes?.type === 'tool_calls')
+		.map((token) => (token.view ? agentViewName(token.view) : (token.attributes?.name ?? 'tool')));
+	$: groupLabel =
+		!hasRejected &&
+		pendingToolTokens.length === 0 &&
+		codeInterpreterCount === 0 &&
+		toolLabels.some(Boolean)
+			? toolLabels.map((label, index) => label || toolNames[index]).join(', ')
+			: '';
 </script>
 
 <div {id} class="w-full min-w-0">
@@ -184,7 +274,7 @@
 			tabindex="0"
 			class="flex-1 min-w-0 py-0.5 text-left {compactPreview
 				? 'text-xs'
-				: 'text-[0.9375rem]'} text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition cursor-pointer"
+				: 'text-[0.90625rem]'} text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition cursor-pointer"
 			aria-label={$i18n.t('Toggle details')}
 			aria-expanded={open}
 			on:click={() => {
@@ -199,7 +289,7 @@
 		>
 			<div class="flex items-center gap-1.5 min-w-0">
 				<!-- Status icon -->
-				{#if hasActiveToolCalls}
+				{#if hasActiveDetails}
 					<div>
 						<Spinner className="size-4" />
 					</div>
@@ -223,11 +313,25 @@
 
 				<!-- Summary text -->
 				<div class="flex-1 line-clamp-1">
-					<span class="text-gray-600 dark:text-gray-300 {hasActiveToolCalls ? 'shimmer' : ''}"
-						>{prefixText}</span
-					>
-					{#if summaryText}
-						<span class="text-gray-400 dark:text-gray-500">{summaryText}</span>
+					{#if groupLabel}
+						<span
+							class="text-gray-400 dark:text-gray-500 {hasActiveDetails ? 'shimmer' : ''}"
+							title={`${prefixText} ${summaryText}`}>{groupLabel}</span
+						>
+					{:else if actionText}
+						<span class="text-gray-500 dark:text-gray-400 {hasActiveDetails ? 'shimmer' : ''}"
+							>{actionText}</span
+						>
+						{#if summaryText}
+							<span class="text-gray-400 dark:text-gray-500">{summaryText}</span>
+						{/if}
+					{:else}
+						<span class="text-gray-600 dark:text-gray-300 {hasActiveDetails ? 'shimmer' : ''}"
+							>{prefixText}</span
+						>
+						{#if summaryText}
+							<span class="text-gray-400 dark:text-gray-500">{summaryText}</span>
+						{/if}
 					{/if}
 				</div>
 
@@ -309,14 +413,18 @@
 	{#if allEmbeds.length > 0}
 		{#each allEmbeds as embedItem, idx}
 			<div id={`${id}-embed-${idx}`}>
-				<FullHeightIframe
-					src={embedItem.embed}
-					args={embedItem.args}
-					allowScripts={true}
-					allowForms={$settings?.iframeSandboxAllowForms ?? false}
-					allowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
-					allowPopups={true}
-				/>
+				{#if typeof embedItem.embed === 'object' && embedItem.embed?.type === 'mcp_app'}
+					{#key JSON.stringify(embedItem.embed)}<MCPApp app={embedItem.embed} />{/key}
+				{:else if typeof embedItem.embed === 'string'}
+					<FullHeightIframe
+						src={embedItem.embed}
+						args={embedItem.args}
+						allowScripts={true}
+						allowForms={$settings?.iframeSandboxAllowForms ?? false}
+						allowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
+						allowPopups={true}
+					/>
+				{/if}
 			</div>
 		{/each}
 	{/if}

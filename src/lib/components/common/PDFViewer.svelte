@@ -1,9 +1,15 @@
 <script lang="ts">
-	import { onMount, onDestroy, tick } from 'svelte';
+	import { getContext, onMount, onDestroy, tick } from 'svelte';
 	import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 	import panzoom, { type PanZoom } from 'panzoom';
 	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
 	import Spinner from './Spinner.svelte';
+	import { readPdfComments } from '$lib/utils/comments/pdf';
+	import { mapWordComments, type PdfTextRun } from '$lib/utils/comments/pdfAnchors';
+	import { findTextRange, highlightRange, commentPin } from '$lib/utils/comments/highlights';
+	import type { FileComment, CommentResult } from '$lib/utils/comments/types';
+
+	const i18n: any = getContext('i18n');
 
 	export let url: string | null = null;
 	export let data: ArrayBuffer | Uint8Array | null = null;
@@ -12,6 +18,206 @@
 	export let singlePage = false;
 	export let itemLabel = 'Page';
 	export let onPageChange: ((page: number) => void) | null = null;
+	export let onComments: ((result: CommentResult) => void) | null = null;
+	export let onCommentsError: (() => void) | null = null;
+	export let onCommentSelect: ((comment: FileComment) => void) | null = null;
+	export let selectedComment: FileComment | null = null;
+	export let sourceComments: FileComment[] | null = null;
+	export let onAnchors: ((ids: string[]) => void) | null = null;
+	let mappedSource: FileComment[] | null = null;
+	let mappedDoc: PdfDocument | null = null;
+	let textRuns: Promise<PdfTextRun[]> | null = null;
+	const mapSourceComments = async () => {
+		if (!sourceComments || !pdfDoc || (mappedSource === sourceComments && mappedDoc === pdfDoc))
+			return;
+		const doc = pdfDoc;
+		const source = sourceComments;
+		mappedDoc = doc;
+		mappedSource = source;
+		if (!textRuns)
+			textRuns = (async () => {
+				const runs: PdfTextRun[] = [];
+				for (let number = 1; number <= doc.numPages; number++) {
+					const page = await doc.getPage(number);
+					const content = await page.getTextContent();
+					for (const item of content.items)
+						if ('str' in item) {
+							const [a, b, c, d, x, y] = item.transform;
+							const height = item.height || Math.hypot(c, d);
+							runs.push({ text: item.str, page: number, rect: [x, y, x + item.width, y + height] });
+						}
+				}
+				return runs;
+			})();
+		try {
+			const word = source.some((c) => c.location?.kind === 'word');
+			const mapped = word ? mapWordComments(source, await textRuns) : [];
+			if (!word)
+				for (const c of source) {
+					const loc = c.location;
+					if (
+						loc?.kind !== 'slide' ||
+						loc.hidden ||
+						!loc.pdfPage ||
+						loc.pdfPage > doc.numPages ||
+						loc.x === undefined ||
+						loc.y === undefined ||
+						!loc.width ||
+						!loc.height
+					)
+						continue;
+					const page = await doc.getPage(loc.pdfPage);
+					const [left, bottom, right, top] = page.view;
+					const x = left + (loc.x / loc.width) * (right - left);
+					const y = top - (loc.y / loc.height) * (top - bottom);
+					mapped.push({
+						...c,
+						location: { kind: 'pdf', page: loc.pdfPage, rect: [x, y - 18, x + 18, y] }
+					});
+				}
+			if (mappedDoc !== doc || mappedSource !== source || pdfDoc !== doc) return;
+			comments = mapped;
+			onAnchors?.(comments.map((c) => c.id));
+			void renderCommentMarkers();
+		} catch {
+			if (pdfDoc === doc) onAnchors?.([]);
+		}
+	};
+	let comments: FileComment[] = [];
+	let markerToken = 0;
+	let resizeObserver: ResizeObserver | null = null;
+	let pageObserver: IntersectionObserver | null = null;
+	const nearbyWrappers = new Set<HTMLElement>();
+	const renderedZooms = new WeakMap<HTMLElement, number>();
+	let renderingDoc: PdfDocument | null = null;
+	let lastWidth = 0;
+	let lastHeight = 0;
+	let resizeTimer: ReturnType<typeof setTimeout>;
+	const renderCommentMarkers = async () => {
+		const token = ++markerToken;
+		if (!sceneElement || !pdfDoc || (!onComments && !sourceComments)) return;
+		const doc = pdfDoc;
+		for (const wrapper of Array.from(
+			sceneElement.querySelectorAll<HTMLElement>('.pdf-page-wrapper')
+		)) {
+			wrapper.querySelector('.file-comment-layer')?.remove();
+			const pageNumber = Number(wrapper.dataset.pageNumber);
+			const page = await doc.getPage(pageNumber);
+			if (token !== markerToken) return;
+			const unit = page.getViewport({ scale: 1 });
+			const viewport = page.getViewport({ scale: parseFloat(wrapper.style.width) / unit.width });
+			const layer = document.createElement('div');
+			layer.className = 'file-comment-layer';
+			Object.assign(layer.style, {
+				position: 'absolute',
+				inset: '0',
+				pointerEvents: 'none',
+				zIndex: '4'
+			});
+			for (const comment of comments.filter(
+				(c) => c.location?.kind === 'pdf' && c.location.page === pageNumber && !c.parentId
+			)) {
+				const loc = comment.location;
+				if (loc?.kind !== 'pdf' || loc.rect.length !== 4 || !loc.rect.every(Number.isFinite))
+					continue;
+				const rect = viewport.convertToViewportRectangle(loc.rect);
+				const left = Math.min(rect[0], rect[2]);
+				const top = Math.min(rect[1], rect[3]);
+				const source = sourceComments?.find((c) => c.id === comment.id);
+				if (source?.location?.kind === 'word' && source.location.quote) {
+					const range = findTextRange(wrapper, source.location.quote);
+					if (
+						range &&
+						highlightRange(
+							wrapper,
+							layer,
+							range,
+							comment.id,
+							`${$i18n.t('Comment')}: ${comment.author || $i18n.t('Unknown author')}`
+						)
+					)
+						continue;
+				}
+				const regions = loc.quads?.length
+					? Array.from({ length: Math.floor(loc.quads.length / 8) }, (_, i) => {
+							const q = loc.quads!.slice(i * 8, i * 8 + 8);
+							return [
+								Math.min(q[0], q[2], q[4], q[6]),
+								Math.min(q[1], q[3], q[5], q[7]),
+								Math.max(q[0], q[2], q[4], q[6]),
+								Math.max(q[1], q[3], q[5], q[7])
+							];
+						})
+					: [];
+				for (const region of regions) {
+					const r = viewport.convertToViewportRectangle(region);
+					const target = document.createElement('button');
+					target.type = 'button';
+					target.dataset.fileCommentId = comment.id;
+					target.dataset.commentHighlight = comment.id;
+					target.setAttribute(
+						'aria-label',
+						`${$i18n.t('Comment')}: ${comment.author || $i18n.t('Unknown author')}`
+					);
+					Object.assign(target.style, {
+						position: 'absolute',
+						left: `${Math.min(r[0], r[2])}px`,
+						top: `${Math.min(r[1], r[3])}px`,
+						width: `${Math.abs(r[2] - r[0])}px`,
+						height: `${Math.abs(r[3] - r[1])}px`,
+						pointerEvents: 'none',
+						background: 'transparent',
+						border: '0',
+						borderBottom: '1px solid rgba(180,130,30,.6)',
+						cursor: 'help'
+					});
+					layer.appendChild(target);
+				}
+				if (regions.length) continue;
+				const button = commentPin(
+					comment.id,
+					`${$i18n.t('Comment')}: ${comment.author || $i18n.t('Unknown author')}`
+				);
+				button.dataset.commentId = comment.id;
+				button.style.left = `${Math.max(0, Math.min(viewport.width - 20, left - 22))}px`;
+				button.style.top = `${Math.max(0, Math.min(viewport.height - 20, top))}px`;
+				button.onclick = () => onCommentSelect?.(comment);
+				layer.appendChild(button);
+			}
+			const selected = selectedComment?.location;
+			if (selected?.kind === 'pdf' && selected.page === pageNumber) {
+				const regions: number[][] = [];
+				if (selected.quads?.length)
+					for (let i = 0; i + 7 < selected.quads.length; i += 8) {
+						const q = selected.quads.slice(i, i + 8);
+						regions.push([
+							Math.min(q[0], q[2], q[4], q[6]),
+							Math.min(q[1], q[3], q[5], q[7]),
+							Math.max(q[0], q[2], q[4], q[6]),
+							Math.max(q[1], q[3], q[5], q[7])
+						]);
+					}
+				else regions.push(selected.rect);
+				for (const region of regions) {
+					if (region.length !== 4 || !region.every(Number.isFinite)) continue;
+					const r = viewport.convertToViewportRectangle(region);
+					const highlight = document.createElement('div');
+					highlight.dataset.selectedAnnotation = selectedComment!.id;
+					Object.assign(highlight.style, {
+						position: 'absolute',
+						left: `${Math.min(r[0], r[2])}px`,
+						top: `${Math.min(r[1], r[3])}px`,
+						width: `${Math.max(3, Math.abs(r[2] - r[0]))}px`,
+						height: `${Math.max(3, Math.abs(r[3] - r[1]))}px`,
+						outline: '2px solid #2563eb',
+						background: 'rgba(250,204,21,.15)'
+					});
+					layer.appendChild(highlight);
+				}
+			}
+			wrapper.appendChild(layer);
+		}
+	};
 
 	type PdfDocument = import('pdfjs-dist').PDFDocumentProxy;
 	type PdfTextLayer = InstanceType<typeof import('pdfjs-dist').TextLayer>;
@@ -76,7 +282,7 @@
 				},
 				beforeMouseDown: (e) => {
 					// Only allow drag-to-pan when zoomed in (not at default scale)
-					if ((e?.target as HTMLElement | null)?.closest?.('.textLayer')) {
+					if ((e?.target as HTMLElement | null)?.closest?.('.textLayer, .file-comment-layer')) {
 						return true;
 					}
 					const transform = pzInstance?.getTransform();
@@ -117,8 +323,7 @@
 
 	export const resetView = () => {
 		if (pzInstance) {
-			pzInstance.moveTo(0, 0);
-			pzInstance.zoomAbs(0, 0, 1);
+			initPanzoom();
 			zoomLevel = 1;
 			rerenderPages(1);
 		}
@@ -193,53 +398,86 @@
 		scrollFrame = requestAnimationFrame(syncVisiblePage);
 	};
 
+	const renderPage = async (wrapper: HTMLElement, forZoom: number) => {
+		const page = await pdfDoc!.getPage(Number(wrapper.dataset.pageNumber));
+		const pdfjs = await import('pdfjs-dist');
+		const dpr = window.devicePixelRatio || 1;
+		const viewport = page.getViewport({ scale: 1 });
+		const cssScale = parseFloat(wrapper.style.width) / viewport.width;
+		const renderScale = cssScale * forZoom * dpr;
+		const scaledViewport = page.getViewport({ scale: renderScale });
+		const cssViewport = page.getViewport({ scale: cssScale });
+
+		// Update the CSS custom property so textLayer dimensions resolve correctly
+		wrapper.style.setProperty('--scale-factor', String(cssViewport.scale));
+
+		const canvas = wrapper.querySelector('canvas')!;
+		canvas.width = scaledViewport.width;
+		canvas.height = scaledViewport.height;
+
+		const ctx = canvas.getContext('2d');
+		if (ctx) {
+			await page.render({ canvas, canvasContext: ctx, viewport: scaledViewport }).promise;
+		}
+
+		// Rebuild text layer
+		const textLayerDiv = wrapper.querySelector('.textLayer') as HTMLElement;
+		textLayerDiv.innerHTML = '';
+
+		const textContent = await page.getTextContent();
+		const textLayer = new pdfjs.TextLayer({
+			textContentSource: textContent,
+			container: textLayerDiv,
+			viewport: cssViewport
+		});
+		await textLayer.render();
+		return textLayer;
+	};
+
+	const releasePage = async (wrapper: HTMLElement) => {
+		renderedZooms.delete(wrapper);
+		const canvas = wrapper.querySelector('canvas')!;
+		canvas.width = 0;
+		canvas.height = 0;
+		wrapper.querySelector<HTMLElement>('.textLayer')!.innerHTML = '';
+		(await pdfDoc?.getPage(Number(wrapper.dataset.pageNumber)))?.cleanup();
+	};
+
+	// One page at a time, so two renders never share a canvas
+	const renderNearbyPages = async () => {
+		const doc = pdfDoc;
+		if (!doc || renderingDoc === doc) return;
+		renderingDoc = doc;
+		let rendered = false;
+		const distance = (wrapper: HTMLElement) =>
+			Math.abs(Number(wrapper.dataset.pageNumber) - activePage);
+		while (pdfDoc === doc) {
+			const [wrapper] = [...nearbyWrappers]
+				.filter((nearby) => renderedZooms.get(nearby) !== lastRenderedZoom)
+				.sort((a, b) => distance(a) - distance(b));
+			if (!wrapper) break;
+			renderedZooms.set(wrapper, lastRenderedZoom);
+			rendered = true;
+			try {
+				await renderPage(wrapper, lastRenderedZoom);
+				if (!nearbyWrappers.has(wrapper)) await releasePage(wrapper);
+			} catch (e) {
+				if (pdfDoc === doc) console.error('PDF render error:', e);
+			}
+		}
+		if (renderingDoc === doc) renderingDoc = null;
+		if (rendered) void renderCommentMarkers();
+	};
+
 	// Re-render existing canvases at a new zoom level (preserves panzoom transform)
 	const rerenderPages = async (forZoom: number) => {
 		if (!pdfDoc || !sceneElement) return;
-		const pdfjs = await import('pdfjs-dist');
-		const dpr = window.devicePixelRatio || 1;
-
-		const pageWrappers = sceneElement.querySelectorAll('.pdf-page-wrapper');
+		lastRenderedZoom = forZoom;
+		if (!singlePage) return renderNearbyPages();
 
 		cancelTextLayers();
-
-		for (let i = 0; i < pageWrappers.length; i++) {
-			const page = await pdfDoc.getPage(singlePage ? selectedPage : i + 1);
-			const viewport = page.getViewport({ scale: 1 });
-			const cssScale = getCssScale(viewport);
-			const renderScale = cssScale * forZoom * dpr;
-			const scaledViewport = page.getViewport({ scale: renderScale });
-			const cssViewport = page.getViewport({ scale: cssScale });
-
-			const wrapper = pageWrappers[i] as HTMLElement;
-			// Update the CSS custom property so textLayer dimensions resolve correctly
-			wrapper.style.setProperty('--scale-factor', String(cssViewport.scale));
-
-			const canvas = wrapper.querySelector('canvas')!;
-			canvas.width = scaledViewport.width;
-			canvas.height = scaledViewport.height;
-
-			const ctx = canvas.getContext('2d');
-			if (ctx) {
-				await page.render({ canvas, canvasContext: ctx, viewport: scaledViewport }).promise;
-			}
-
-			// Rebuild text layer
-			const textLayerDiv = wrapper.querySelector('.textLayer') as HTMLElement;
-			if (textLayerDiv) {
-				textLayerDiv.innerHTML = '';
-
-				const textContent = await page.getTextContent();
-				const textLayer = new pdfjs.TextLayer({
-					textContentSource: textContent,
-					container: textLayerDiv,
-					viewport: cssViewport
-				});
-				await textLayer.render();
-				textLayerInstances.push(textLayer);
-			}
-		}
-		lastRenderedZoom = forZoom;
+		const wrapper = sceneElement.querySelector<HTMLElement>('.pdf-page-wrapper');
+		if (wrapper) textLayerInstances.push(await renderPage(wrapper, forZoom));
 	};
 
 	const getCssScale = (viewport: { width: number; height: number }) => {
@@ -254,13 +492,8 @@
 		if (!pdfDoc || !sceneElement) return;
 		const token = ++renderToken;
 
-		// Clear previous content
-		sceneElement.innerHTML = '';
-
 		cancelTextLayers();
 
-		const pdfjs = await import('pdfjs-dist');
-		const dpr = window.devicePixelRatio || 1;
 		const wrappers: HTMLElement[] = [];
 		const firstPage = singlePage ? selectedPage : 1;
 		const lastPage = singlePage ? selectedPage : pdfDoc.numPages;
@@ -272,8 +505,6 @@
 
 			// Scale to fit container width
 			const cssScale = getCssScale(viewport);
-			const renderScale = cssScale * dpr;
-			const scaledViewport = page.getViewport({ scale: renderScale });
 			const cssViewport = page.getViewport({ scale: cssScale });
 
 			// Create page wrapper (positioned container for canvas + text layer)
@@ -294,46 +525,43 @@
 
 			// Create canvas
 			const canvas = document.createElement('canvas');
-			canvas.width = scaledViewport.width;
-			canvas.height = scaledViewport.height;
 			// CSS size stays at the CSS-pixel dimensions for layout
 			canvas.style.width = `${Math.round(cssScale * viewport.width)}px`;
 			canvas.style.height = `${Math.round(cssScale * viewport.height)}px`;
 			canvas.style.display = 'block';
 			wrapper.appendChild(canvas);
 
-			const ctx = canvas.getContext('2d');
-			if (!ctx) continue;
-
-			await page.render({
-				canvas,
-				canvasContext: ctx,
-				viewport: scaledViewport
-			}).promise;
-			if (token !== renderToken) return;
-
 			// Create text layer overlay — pdfjs setLayerDimensions handles its sizing
 			const textLayerDiv = document.createElement('div');
 			textLayerDiv.className = 'textLayer';
 			wrapper.appendChild(textLayerDiv);
 
-			const textContent = await page.getTextContent();
-			const textLayer = new pdfjs.TextLayer({
-				textContentSource: textContent,
-				container: textLayerDiv,
-				viewport: cssViewport
-			});
-			await textLayer.render();
-			if (token !== renderToken) return;
-			textLayerInstances.push(textLayer);
+			if (singlePage) {
+				const textLayer = await renderPage(wrapper, 1);
+				if (token !== renderToken) return;
+				textLayerInstances.push(textLayer);
+			}
 
 			wrappers.push(wrapper);
 		}
 
+		const { x, y, scale } = pzInstance?.getTransform() ?? { x: 0, y: 0, scale: 1 };
+		const keepView =
+			singlePage && renderedPage && renderedPage !== selectedPage && Math.abs(scale - 1) >= 0.01;
+		pageObserver?.disconnect();
+		for (const wrapper of nearbyWrappers) void releasePage(wrapper);
+		nearbyWrappers.clear();
 		sceneElement.replaceChildren(...wrappers);
+		if (!singlePage) for (const wrapper of wrappers) pageObserver?.observe(wrapper);
+		void renderCommentMarkers();
 		lastRenderedZoom = 1;
+		zoomLevel = 1;
 		renderedPage = singlePage ? selectedPage : 0;
 		initPanzoom();
+		if (keepView) {
+			pzInstance?.zoomAbs(0, 0, scale);
+			pzInstance?.moveTo(x, y);
+		}
 		await scrollToTargetPage();
 		syncVisiblePage();
 	};
@@ -394,7 +622,7 @@
 		if (!url && !data) return;
 
 		const source = data ?? url;
-		if (source === loadedSource && pdfDoc) return;
+		if (source === loadedSource) return;
 		const token = ++loadToken;
 		loadedSource = source;
 		loading = true;
@@ -403,8 +631,14 @@
 		pageCount = 0;
 		pzInstance?.dispose();
 		cancelTextLayers();
+		pageObserver?.disconnect();
+		nearbyWrappers.clear();
 		pdfDoc?.destroy();
 		pdfDoc = null;
+		textRuns = null;
+		mappedDoc = null;
+		mappedSource = null;
+		comments = [];
 
 		try {
 			const pdfjs = await import('pdfjs-dist');
@@ -419,9 +653,23 @@
 				if (!res.ok) throw new Error(`HTTP ${res.status}`);
 				pdfData = await res.arrayBuffer();
 			}
-			pdfDoc = await pdfjs.getDocument({ data: pdfData }).promise;
+			pdfDoc = await pdfjs.getDocument({ data: pdfData, wasmUrl: '/wasm/' }).promise;
 			if (token !== loadToken) return;
 			pageCount = pdfDoc.numPages;
+			if (onComments) {
+				const doc = pdfDoc;
+				void readPdfComments(doc, () => token !== loadToken)
+					.then((result) => {
+						if (token !== loadToken) return;
+						comments = result.comments;
+						onComments?.(result);
+						onAnchors?.(comments.filter((c) => !c.parentId).map((c) => c.id));
+						void renderCommentMarkers();
+					})
+					.catch(() => {
+						if (token === loadToken) onCommentsError?.();
+					});
+			}
 			activePage = clampDocumentTargetPage(targetPage, pageCount) ?? 1;
 			targetPage = clampDocumentTargetPage(targetPage, pageCount) ?? 1;
 			await renderAllPages();
@@ -429,6 +677,7 @@
 			if (token === loadToken) {
 				console.error('PDF render error:', e);
 				error = 'Failed to load PDF.';
+				onCommentsError?.();
 			}
 		} finally {
 			if (token === loadToken) loading = false;
@@ -437,7 +686,28 @@
 
 	onMount(() => {
 		mounted = true;
-		loadPdf();
+		resizeObserver = new ResizeObserver(([entry]) => {
+			const { width, height } = entry.contentRect;
+			if (width <= 0 || height <= 0 || (width === lastWidth && height === lastHeight)) return;
+			lastWidth = width;
+			lastHeight = height;
+			clearTimeout(resizeTimer);
+			resizeTimer = setTimeout(() => {
+				if (!loading && pdfDoc) void renderAllPages();
+			}, 100);
+		});
+		resizeObserver.observe(outerContainer.parentElement!);
+		pageObserver = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const wrapper = entry.target as HTMLElement;
+					if (entry.isIntersecting) nearbyWrappers.add(wrapper);
+					else if (nearbyWrappers.delete(wrapper)) void releasePage(wrapper);
+				}
+				void renderNearbyPages();
+			},
+			{ root: outerContainer, rootMargin: '100% 0px' }
+		);
 	});
 
 	$: if (mounted && (data || url)) {
@@ -452,7 +722,15 @@
 		void scrollToTargetPage();
 	}
 
+	$: if (sourceComments && pdfDoc) void mapSourceComments();
+
+	$: if (selectedComment && !loading) void renderCommentMarkers();
+
 	onDestroy(() => {
+		markerToken++;
+		resizeObserver?.disconnect();
+		pageObserver?.disconnect();
+		clearTimeout(resizeTimer);
 		loadToken++;
 		renderToken++;
 		if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
@@ -472,25 +750,29 @@
 			<Spinner className="size-5" />
 		</div>
 	{:else if error}
-		<div class="absolute inset-0 flex items-center justify-center text-sm text-red-500">
+		<div
+			class="absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-red-500"
+		>
 			{error}
 		</div>
 	{/if}
 
 	<div
-		class={singlePage
-			? 'overflow-hidden h-full flex items-center justify-center overscroll-contain'
-			: 'overflow-y-auto h-full'}
+		class={singlePage ? 'overflow-hidden h-full overscroll-contain' : 'overflow-y-auto h-full'}
 		bind:this={outerContainer}
 		role="application"
 		aria-label={`${itemLabel} viewer`}
 		tabindex="0"
 		on:scroll={handleScroll}
 		on:wheel|nonpassive={handleWheel}
+		on:dblclick|capture|stopPropagation={() => {}}
 		on:pointerdown={focusViewer}
 		on:keydown={handleKeyDown}
 	>
-		<div bind:this={sceneElement} class={singlePage ? '' : 'w-full'}></div>
+		<div
+			bind:this={sceneElement}
+			class={singlePage ? 'w-full h-full flex items-center justify-center' : 'w-full'}
+		></div>
 	</div>
 
 	{#if !error && pdfDoc}
@@ -548,7 +830,7 @@
 				type="button"
 				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 pointer-coarse:hidden"
 				on:click={zoomOut}
-				aria-label="Zoom out"
+				aria-label={$i18n.t('Zoom out')}
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
@@ -567,7 +849,7 @@
 				type="button"
 				class="shrink-0 min-w-12 h-7 px-1.5 py-1 text-center text-[0.6875rem] font-normal text-gray-500 dark:text-gray-400 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition tabular-nums"
 				on:click={resetView}
-				aria-label="Reset zoom"
+				aria-label={$i18n.t('Reset zoom')}
 			>
 				{Math.round(zoomLevel * 100)}%
 			</button>
@@ -575,7 +857,7 @@
 				type="button"
 				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 pointer-coarse:hidden"
 				on:click={zoomIn}
-				aria-label="Zoom in"
+				aria-label={$i18n.t('Zoom in')}
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
@@ -684,5 +966,10 @@
 
 	:global(.textLayer.selecting .endOfContent) {
 		top: 0;
+	}
+
+	/* pdfjs leaves its text-measuring canvas in <body> at 300x150 for PDFs without text */
+	:global(.hiddenCanvasElement) {
+		display: none;
 	}
 </style>

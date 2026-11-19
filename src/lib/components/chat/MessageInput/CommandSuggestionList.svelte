@@ -5,9 +5,14 @@
 	import Skills from './Commands/Skills.svelte';
 	import Emojis from './Commands/Emojis.svelte';
 	import DropdownMenu from '$lib/components/common/DropdownMenu.svelte';
+	import type { Readable, Writable } from 'svelte/store';
 
 	export let char = '';
 	export let query = '';
+	export let selectedTerminalId: Readable<string | null>;
+	export let terminalSkills: Writable<any[]>;
+	export let modelId: string | null | (() => string | null) = null;
+	$: selectedModelId = typeof modelId === 'function' ? modelId() : modelId;
 	export let command: (payload: {
 		id: string;
 		label: string;
@@ -19,40 +24,56 @@
 	export let onUpload: (e: any) => void = () => {};
 	export let onCompact: () => void = () => {};
 	export let onStatus: () => void = () => {};
+	export let onComments: () => void = () => {};
+	export let onSide: () => void = () => {};
 	export let onFork: () => void = () => {};
 	export let onModel: () => void = () => {};
+	export let onCompare: (() => void) | null = null;
 	export let onSettings: () => void = () => {};
 	export let onTemporary: () => void = () => {};
+	export let onCreateSkill: () => void = () => {};
 	export let insertTextHandler: (text: string) => void = () => {};
 	export let canCompact: boolean | (() => boolean) = false;
 	export let compactDisabled: boolean | (() => boolean) = false;
 	export let canStatus: boolean | (() => boolean) = false;
+	export let canComments: boolean | (() => boolean) = false;
+	export let canSide: boolean | (() => boolean) = false;
 	export let canFork: boolean | (() => boolean) = false;
 	export let forkDisabled: boolean | (() => boolean) = false;
 	export let canTemporary: boolean | (() => boolean) = false;
 	export let temporaryEnabled: boolean | (() => boolean) = false;
+	export let hasChatContent = false;
+	export let canCreateSkill: boolean | (() => boolean) = false;
 	export let contextUsage = null;
+	export let fileUploadEnabled: boolean | (() => boolean) = true;
 
 	$: compactAvailable = typeof canCompact === 'function' ? canCompact() : canCompact;
 	$: isCompactDisabled =
 		typeof compactDisabled === 'function' ? compactDisabled() : compactDisabled;
 	$: statusAvailable = typeof canStatus === 'function' ? canStatus() : canStatus;
+	$: commentsAvailable = typeof canComments === 'function' ? canComments() : canComments;
+	$: sideAvailable = typeof canSide === 'function' ? canSide() : canSide;
 	$: forkAvailable = typeof canFork === 'function' ? canFork() : canFork;
 	$: isForkDisabled = typeof forkDisabled === 'function' ? forkDisabled() : forkDisabled;
 	$: temporaryAvailable = typeof canTemporary === 'function' ? canTemporary() : canTemporary;
 	$: isTemporaryEnabled =
 		typeof temporaryEnabled === 'function' ? temporaryEnabled() : temporaryEnabled;
+	$: createSkillAvailable =
+		typeof canCreateSkill === 'function' ? canCreateSkill() : canCreateSkill;
 	$: resolvedContextUsage = typeof contextUsage === 'function' ? contextUsage() : contextUsage;
 	$: contextHasThreshold = Number(resolvedContextUsage?.threshold) > 0;
 	$: contextPercent = contextHasThreshold
 		? Math.max(0, Math.round(resolvedContextUsage?.percent ?? 0))
 		: null;
+	$: isFileUploadEnabled =
+		typeof fileUploadEnabled === 'function' ? fileUploadEnabled() : fileUploadEnabled;
 
 	let suggestionElement: any = null;
 	let filteredItems: any[] = [];
 
 	const onKeyDown = (event: KeyboardEvent) => {
 		if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(event.key)) return false;
+		if ((filteredItems ?? []).length === 0) return false;
 
 		if (event.key === 'ArrowUp') {
 			suggestionElement?.selectUp();
@@ -87,23 +108,34 @@
 	}
 </script>
 
-<div class={(filteredItems ?? []).length > 0 ? '' : 'hidden'} id="suggestions-container">
+<div
+	class={(filteredItems ?? []).length > 0 ? '' : 'hidden'}
+	id={(filteredItems ?? []).length > 0 ? 'suggestions-container' : undefined}
+>
 	<DropdownMenu className="w-72 max-w-[calc(100vw-1rem)] overflow-x-hidden font-sans text-xs">
 		<div class="max-h-60 overflow-y-auto overflow-x-hidden scrollbar-thin">
 			{#if char === '/'}
 				<SlashCommands
+					{selectedTerminalId}
+					{terminalSkills}
+					modelId={selectedModelId}
 					bind:this={suggestionElement}
 					{query}
+					canCompare={onCompare !== null}
 					bind:filteredItems
 					canCompact={compactAvailable}
 					compactDisabled={isCompactDisabled}
 					canStatus={statusAvailable}
+					canComments={commentsAvailable}
+					canSide={sideAvailable}
 					canFork={forkAvailable}
 					forkDisabled={isForkDisabled}
 					canTemporary={temporaryAvailable}
 					temporaryEnabled={isTemporaryEnabled}
 					{contextPercent}
 					{contextHasThreshold}
+					{hasChatContent}
+					canCreateSkill={createSkillAvailable}
 					onSelect={(e) => {
 						const { type, data } = e;
 
@@ -120,18 +152,30 @@
 						} else if (type === 'command' && data.id === 'status') {
 							command({ id: data.id, label: data.id });
 							onStatus();
+						} else if (type === 'command' && data.id === 'comments') {
+							command({ id: data.id, label: data.id });
+							onComments();
+						} else if (type === 'command' && data.id === 'side') {
+							command({ id: data.id, label: data.id });
+							onSide();
 						} else if (type === 'command' && data.id === 'fork') {
 							command({ id: data.id, label: data.id });
 							onFork();
 						} else if (type === 'command' && data.id === 'model') {
 							command({ id: data.id, label: data.id });
 							onModel();
+						} else if (type === 'command' && data.id === 'compare') {
+							command({ id: data.id, label: data.id });
+							onCompare?.();
 						} else if (type === 'command' && data.id === 'settings') {
 							command({ id: data.id, label: data.id });
 							onSettings();
 						} else if (type === 'command' && data.id === 'temporary') {
 							command({ id: data.id, label: data.id });
 							onTemporary();
+						} else if (type === 'command' && data.id === 'skills:create') {
+							command({ id: data.id, label: data.id });
+							onCreateSkill();
 						} else if (type === 'skill') {
 							command({
 								id: `${data.id}|${data.name}`,
@@ -149,6 +193,7 @@
 				<Knowledge
 					bind:this={suggestionElement}
 					{query}
+					fileUploadEnabled={isFileUploadEnabled}
 					bind:filteredItems
 					onSelect={(e) => {
 						const { type, data } = e;
@@ -172,8 +217,11 @@
 				/>
 			{:else if char === '@'}
 				<AtCommands
+					{selectedTerminalId}
+					modelId={selectedModelId}
 					bind:this={suggestionElement}
 					{query}
+					fileUploadEnabled={isFileUploadEnabled}
 					bind:filteredItems
 					onSelect={(e) => {
 						const { type, data } = e;
@@ -211,6 +259,9 @@
 				/>
 			{:else if char === '$'}
 				<Skills
+					{selectedTerminalId}
+					{terminalSkills}
+					modelId={selectedModelId}
 					bind:this={suggestionElement}
 					{query}
 					bind:filteredItems

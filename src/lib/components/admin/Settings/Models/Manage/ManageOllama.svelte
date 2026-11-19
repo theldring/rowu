@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { getContext, onMount } from 'svelte';
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	import { WEBUI_NAME, models, MODEL_DOWNLOAD_POOL, user, config, settings } from '$lib/stores';
 	import { splitStream } from '$lib/utils';
@@ -54,13 +54,9 @@
 	let createModelDigest = '';
 	let createModelPullProgress = null;
 
-	let digest = '';
-	let pullProgress = null;
-
 	let modelUploadMode = 'file';
 	let modelInputFile: File[] | null = null;
 	let modelFileUrl = '';
-	let modelFileContent = `TEMPLATE """{{ .System }}\nUSER: {{ .Prompt }}\nASSISTANT: """\nPARAMETER num_ctx 4096\nPARAMETER stop "</s>"\nPARAMETER stop "USER:"\nPARAMETER stop "ASSISTANT:"`;
 	let modelFileDigest = '';
 
 	let uploadProgress = null;
@@ -274,12 +270,7 @@
 					})
 				);
 
-				models.set(
-					await getModels(
-						localStorage.token,
-						$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
-					)
-				);
+				models.set(await getModels(localStorage.token));
 			} else {
 				toast.error($i18n.t('Download canceled'));
 			}
@@ -300,7 +291,6 @@
 
 		let uploaded = false;
 		let fileResponse = null;
-		let name = '';
 
 		if (modelUploadMode === 'file') {
 			const file = modelInputFile ? modelInputFile[0] : null;
@@ -353,13 +343,13 @@
 
 							if (data.done) {
 								modelFileDigest = data.blob;
-								name = data.name;
 								uploaded = true;
 							}
 						}
 					}
 				} catch (err) {
 					console.error(err);
+					toast.error(`${err}`);
 				}
 			}
 		} else {
@@ -368,65 +358,7 @@
 		}
 
 		if (uploaded) {
-			const res = await createModel(
-				localStorage.token,
-				`${name}:latest`,
-				`FROM @${modelFileDigest}\n${modelFileContent}`
-			);
-
-			if (res && res.ok) {
-				const reader = res.body
-					.pipeThrough(new TextDecoderStream())
-					.pipeThrough(splitStream('\n'))
-					.getReader();
-
-				while (true) {
-					const { value, done } = await reader.read();
-					if (done) break;
-
-					try {
-						let lines = value.split('\n');
-
-						for (const line of lines) {
-							if (line !== '') {
-								console.log(line);
-								let data = JSON.parse(line);
-								console.log(data);
-
-								if (data.error) {
-									throw data.error;
-								}
-								if (data.detail) {
-									throw data.detail;
-								}
-
-								if (data.status) {
-									if (
-										!data.digest &&
-										!data.status.includes('writing') &&
-										!data.status.includes('sha256')
-									) {
-										toast.success(data.status);
-									} else {
-										if (data.digest) {
-											digest = data.digest;
-
-											if (data.completed) {
-												pullProgress = Math.round((data.completed / data.total) * 1000) / 10;
-											} else {
-												pullProgress = 100;
-											}
-										}
-									}
-								}
-							}
-						}
-					} catch (err) {
-						console.error(err);
-						toast.error(`${err}`);
-					}
-				}
-			}
+			toast.success($i18n.t('Model created successfully!'));
 		}
 
 		modelFileUrl = '';
@@ -438,12 +370,7 @@
 		modelLoading = false;
 		uploadProgress = null;
 
-		models.set(
-			await getModels(
-				localStorage.token,
-				$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
-			)
-		);
+		models.set(await getModels(localStorage.token));
 	};
 
 	const deleteModelHandler = async () => {
@@ -456,12 +383,7 @@
 		}
 
 		deleteModelTag = '';
-		models.set(
-			await getModels(
-				localStorage.token,
-				$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
-			)
-		);
+		models.set(await getModels(localStorage.token));
 
 		ollamaModels = await getOllamaModels(localStorage.token, urlIdx).catch((error) => {
 			toast.error(`${error}`);
@@ -488,7 +410,6 @@
 			MODEL_DOWNLOAD_POOL.set({
 				...$MODEL_DOWNLOAD_POOL
 			});
-			await deleteModel(localStorage.token, model);
 			toast.success($i18n.t('{{model}} download has been canceled', { model: model }));
 		}
 	};
@@ -517,6 +438,13 @@
 			toast.error(`${error}`);
 			return null;
 		});
+
+		if (res && !res.ok) {
+			createModelLoading = false;
+			const error = await res.json();
+			toast.error(error.detail);
+			return;
+		}
 
 		if (res && res.ok) {
 			const reader = res.body
@@ -573,12 +501,7 @@
 			}
 		}
 
-		models.set(
-			await getModels(
-				localStorage.token,
-				$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
-			)
-		);
+		models.set(await getModels(localStorage.token));
 
 		createModelLoading = false;
 
@@ -618,12 +541,12 @@
 			<div class="space-y-2">
 				<div>
 					<div class=" mb-2 text-sm font-normal flex items-center gap-1.5">
-						<div>
+						<label for="pull-model-tag">
 							{$i18n.t('Pull a model from Ollama.com')}
-						</div>
+						</label>
 
 						<div>
-							<Tooltip content="Update All Models" placement="top">
+							<Tooltip content={$i18n.t('Update All Models')} placement="top">
 								<button
 									class="flex gap-2 items-center bg-transparent rounded-lg transition"
 									aria-label={$i18n.t('Update All Models')}
@@ -651,6 +574,7 @@
 					<div class="flex w-full">
 						<div class="flex-1 mr-2">
 							<input
+								id="pull-model-tag"
 								class={inputClass}
 								placeholder={$i18n.t('Enter model tag (e.g. {{modelTag}})', {
 									modelTag: 'mistral:7b'
@@ -661,6 +585,7 @@
 						<Tooltip content={$i18n.t('Pull Model')} placement="top">
 							<button
 								class={iconButtonClass}
+								aria-label={$i18n.t('Pull Model')}
 								on:click={() => {
 									pullModelHandler();
 								}}
@@ -726,7 +651,10 @@
 
 					{#if updateModelId}
 						<div class="text-xs flex justify-between items-center">
-							<div>Updating "{updateModelId}" {updateProgress ? `(${updateProgress}%)` : ''}</div>
+							<div>
+								{$i18n.t('Updating "{{modelId}}"', { modelId: updateModelId })}
+								{updateProgress ? `(${updateProgress}%)` : ''}
+							</div>
 
 							<Tooltip content={$i18n.t('Cancel')}>
 								<button
@@ -862,10 +790,13 @@
 				</div>
 
 				<div>
-					<div class=" mb-2 text-sm font-normal">{$i18n.t('Create a model')}</div>
+					<label for="create-model-tag" class="block mb-2 text-sm font-normal"
+						>{$i18n.t('Create a model')}</label
+					>
 					<div class="flex w-full">
 						<div class="flex-1 mr-2 flex flex-col gap-2">
 							<input
+								id="create-model-tag"
 								class={inputClass}
 								placeholder={$i18n.t('Enter model tag (e.g. {{modelTag}})', {
 									modelTag: 'my-modelfile'
@@ -878,9 +809,10 @@
 								bind:value={createModelObject}
 								class="{textareaClass} resize-none scrollbar-hidden"
 								rows="6"
+								aria-label={$i18n.t('Model JSON')}
 								placeholder={`e.g. {"model": "my-modelfile", "from": "ollama:7b"})`}
 								disabled={createModelLoading}
-							/>
+							></textarea>
 						</div>
 
 						<div class="flex self-start">
@@ -915,7 +847,7 @@
 
 					{#if createModelDigest !== ''}
 						<div class="flex flex-col mt-1">
-							<div class="font-normal mb-1">{createModelTag}</div>
+							<div class="font-normal mb-1">{createModelName}</div>
 							<div class="">
 								<div class="flex flex-row justify-between space-x-4 pr-2">
 									<div class=" flex-1">
@@ -1016,6 +948,7 @@
 											type="url"
 											required
 											bind:value={modelFileUrl}
+											aria-label={$i18n.t('Type Hugging Face Resolve (Download) URL')}
 											placeholder={$i18n.t('Type Hugging Face Resolve (Download) URL')}
 										/>
 									</div>
@@ -1024,7 +957,12 @@
 
 							{#if (modelUploadMode === 'file' && modelInputFile && modelInputFile.length > 0) || (modelUploadMode === 'url' && modelFileUrl !== '')}
 								<Tooltip content={$i18n.t('Upload Model')} placement="top">
-									<button class={iconButtonClass} type="submit" disabled={modelLoading}>
+									<button
+										class={iconButtonClass}
+										type="submit"
+										aria-label={$i18n.t('Upload Model')}
+										disabled={modelLoading}
+									>
 										{#if modelLoading}
 											<div class="self-center">
 												<svg
@@ -1075,20 +1013,6 @@
 							{/if}
 						</div>
 
-						{#if (modelUploadMode === 'file' && modelInputFile && modelInputFile.length > 0) || (modelUploadMode === 'url' && modelFileUrl !== '')}
-							<div>
-								<div>
-									<div class=" my-2.5 text-sm font-normal">
-										{$i18n.t('Modelfile Content')}
-									</div>
-									<textarea
-										bind:value={modelFileContent}
-										class="{textareaClass} resize-none"
-										rows="6"
-									/>
-								</div>
-							</div>
-						{/if}
 						<div class=" mt-1 text-xs text-gray-400 dark:text-gray-500">
 							{$i18n.t('To access the GGUF models available for downloading,')}
 							<a

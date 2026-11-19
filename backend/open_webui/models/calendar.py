@@ -3,12 +3,13 @@ import time
 from typing import Optional
 from uuid import uuid4
 
-from open_webui.internal.db import Base, get_async_db_context
+from open_webui.models.notifications import emit_changes
 from open_webui.constants import ERROR_MESSAGES
+from open_webui.internal.db import Base, get_async_db_context
 from open_webui.models.access_grants import AccessGrantModel, AccessGrants
 from open_webui.models.groups import Groups
 from open_webui.models.users import User, UserModel, UserResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -30,9 +31,7 @@ log = logging.getLogger(__name__)
 MIN_CALENDAR_RRULE_INTERVAL_SECONDS = 24 * 60 * 60
 
 
-####################
 # Calendar DB Schema
-####################
 
 
 class Calendar(Base):
@@ -97,9 +96,7 @@ class CalendarEventAttendee(Base):
     )
 
 
-####################
 # Pydantic Models
-####################
 
 
 class CalendarModel(BaseModel):
@@ -158,9 +155,7 @@ class CalendarEventAttendeeModel(BaseModel):
     updated_at: int
 
 
-####################
 # Forms
-####################
 
 
 class CalendarForm(BaseModel):
@@ -176,7 +171,20 @@ class CalendarUpdateForm(BaseModel):
     color: Optional[str] = None
     data: Optional[dict] = None
     meta: Optional[dict] = None
-    access_grants: Optional[list[dict]] = None
+
+
+async def validate_calendar_rrule(value: Optional[str]) -> None:
+    if value:
+        from open_webui.utils.recurrence import rrule_interval_seconds
+
+        try:
+            interval = await rrule_interval_seconds(value)
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(ERROR_MESSAGES.AUTOMATION_INVALID_RRULE(e)) from e
+        if interval is not None and interval < MIN_CALENDAR_RRULE_INTERVAL_SECONDS:
+            raise ValueError(ERROR_MESSAGES.CALENDAR_RRULE_TOO_FREQUENT)
 
 
 class CalendarEventForm(BaseModel):
@@ -192,22 +200,6 @@ class CalendarEventForm(BaseModel):
     data: Optional[dict] = None
     meta: Optional[dict] = None
     attendees: Optional[list[dict]] = None
-
-    @field_validator('rrule')
-    @classmethod
-    def reject_sub_daily_rrule(cls, value: Optional[str]) -> Optional[str]:
-        if value:
-            from open_webui.utils.automations import rrule_interval_seconds
-
-            try:
-                interval = rrule_interval_seconds(value)
-            except ValueError:
-                raise
-            except Exception as e:
-                raise ValueError(ERROR_MESSAGES.AUTOMATION_INVALID_RRULE(e))
-            if interval is not None and interval < MIN_CALENDAR_RRULE_INTERVAL_SECONDS:
-                raise ValueError(ERROR_MESSAGES.CALENDAR_RRULE_TOO_FREQUENT)
-        return value
 
 
 class CalendarEventUpdateForm(BaseModel):
@@ -225,30 +217,12 @@ class CalendarEventUpdateForm(BaseModel):
     is_cancelled: Optional[bool] = None
     attendees: Optional[list[dict]] = None
 
-    @field_validator('rrule')
-    @classmethod
-    def reject_sub_daily_rrule(cls, value: Optional[str]) -> Optional[str]:
-        if value:
-            from open_webui.utils.automations import rrule_interval_seconds
-
-            try:
-                interval = rrule_interval_seconds(value)
-            except ValueError:
-                raise
-            except Exception as e:
-                raise ValueError(ERROR_MESSAGES.AUTOMATION_INVALID_RRULE(e))
-            if interval is not None and interval < MIN_CALENDAR_RRULE_INTERVAL_SECONDS:
-                raise ValueError(ERROR_MESSAGES.CALENDAR_RRULE_TOO_FREQUENT)
-        return value
-
 
 class RSVPForm(BaseModel):
     status: str  # 'accepted' | 'declined' | 'tentative' | 'pending'
 
 
-####################
 # Response Models
-####################
 
 
 class CalendarEventUserResponse(CalendarEventModel):
@@ -260,9 +234,7 @@ class CalendarEventListResponse(BaseModel):
     total: int
 
 
-####################
 # Table Operations
-####################
 
 
 class CalendarTable:
@@ -309,7 +281,7 @@ class CalendarTable:
     async def get_calendars_by_user(self, user_id: str, db: Optional[AsyncSession] = None) -> list[CalendarModel]:
         """Owned + shared calendars."""
         async with get_async_db_context(db) as db:
-            user_groups = await Groups.get_groups_by_member_id(user_id, db=db)
+            user_groups = await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
             user_group_ids = [g.id for g in user_groups]
 
             stmt = select(Calendar)
@@ -380,8 +352,6 @@ class CalendarTable:
                 cal.data = {**(cal.data or {}), **update_data['data']}
             if 'meta' in update_data:
                 cal.meta = {**(cal.meta or {}), **update_data['meta']}
-            if 'access_grants' in update_data:
-                await AccessGrants.set_access_grants('calendar', id, update_data['access_grants'], db=db)
 
             cal.updated_at = int(time.time_ns())
             await db.commit()
@@ -429,8 +399,12 @@ class CalendarTable:
                 await db.execute(delete(CalendarEvent).filter(CalendarEvent.calendar_id == id))
 
                 # Delete calendar
+                from open_webui.models.notifications import delete_notifications
+
+                recipients = await delete_notifications(resource_type='calendar', resource_ids=[id], db=db)
                 await db.execute(delete(Calendar).filter(Calendar.id == id))
                 await db.commit()
+                await emit_changes(recipients)
 
             # Revoke access grants in a separate transaction to avoid
             # write-lock contention on SQLite when session sharing is off.
@@ -465,6 +439,7 @@ class CalendarEventTable:
     async def insert_new_event(
         self, user_id: str, form_data: CalendarEventForm, db: Optional[AsyncSession] = None
     ) -> Optional[CalendarEventModel]:
+        await validate_calendar_rrule(form_data.rrule)
         async with get_async_db_context(db) as db:
             now = int(time.time_ns())
             event = CalendarEvent(
@@ -514,7 +489,7 @@ class CalendarEventTable:
         Recurring events are fetched if they have any rrule (expansion in Python).
         """
         async with get_async_db_context(db) as db:
-            user_groups = await Groups.get_groups_by_member_id(user_id, db=db)
+            user_groups = await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
             user_group_ids = [g.id for g in user_groups]
 
             # Get calendar IDs accessible to user
@@ -616,7 +591,7 @@ class CalendarEventTable:
         db: Optional[AsyncSession] = None,
     ) -> CalendarEventListResponse:
         async with get_async_db_context(db) as db:
-            user_groups = await Groups.get_groups_by_member_id(user_id, db=db)
+            user_groups = await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
             user_group_ids = [g.id for g in user_groups]
 
             # Get accessible calendar IDs
@@ -695,6 +670,7 @@ class CalendarEventTable:
     async def update_event_by_id(
         self, id: str, form_data: CalendarEventUpdateForm, db: Optional[AsyncSession] = None
     ) -> Optional[CalendarEventModel]:
+        await validate_calendar_rrule(form_data.rrule)
         async with get_async_db_context(db) as db:
             result = await db.execute(select(CalendarEvent).filter(CalendarEvent.id == id))
             event = result.scalars().first()
@@ -791,8 +767,12 @@ class CalendarEventTable:
         try:
             async with get_async_db_context(db) as db:
                 await db.execute(delete(CalendarEventAttendee).filter(CalendarEventAttendee.event_id == id))
+                from open_webui.models.notifications import delete_notifications
+
+                recipients = await delete_notifications(object_type='calendar_event', object_ids=[id], db=db)
                 await db.execute(delete(CalendarEvent).filter(CalendarEvent.id == id))
                 await db.commit()
+                await emit_changes(recipients)
                 return True
         except Exception:
             return False

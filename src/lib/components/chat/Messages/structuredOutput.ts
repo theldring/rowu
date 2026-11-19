@@ -1,3 +1,7 @@
+import { encode } from 'html-entities';
+import { getDispatchedVisualizationPreviews } from '$lib/utils/visualizations/dispatch';
+import { agentView, terminalView, type AgentView } from './agentViews';
+
 export type OutputContentPart = {
 	type?: string;
 	text?: unknown;
@@ -9,10 +13,16 @@ export type OutputItem = {
 	id?: string;
 	call_id?: string;
 	name?: string;
+	display_label?: string;
+	display_labels?: { running?: string; completed?: string };
 	status?: string;
+	hidden?: boolean;
+	tool_id?: string;
+	tool_type?: string;
+	tool_targets?: Record<string, { tool_id: string; tool_type: string }>;
 	arguments?: unknown;
 	content?: OutputContentPart[];
-	summary?: OutputContentPart[];
+	summary?: OutputContentPart[] | string;
 	output?: OutputContentPart[];
 	files?: unknown;
 	embeds?: unknown;
@@ -28,10 +38,13 @@ export type OutputItem = {
 export type OutputDetailToken = {
 	summary: string;
 	text: string;
+	view?: AgentView | null;
 	attributes: {
 		type: string;
 		id?: string;
 		name?: string;
+		display_label?: string;
+		running_label?: string;
 		done?: string;
 		duration?: string;
 		arguments?: string;
@@ -43,10 +56,16 @@ export type OutputDetailToken = {
 };
 
 export type OutputDisplayItem =
+	| { type: 'visualization'; id: string; call: OutputItem; result?: OutputItem }
 	| {
 			type: 'message';
 			id: string;
 			text: string;
+	  }
+	| {
+			type: 'image';
+			id: string;
+			src: string;
 	  }
 	| {
 			type: 'detail_single';
@@ -62,6 +81,12 @@ export type OutputDisplayItem =
 			type: 'file';
 			id: string;
 			item: Record<string, unknown>;
+	  }
+	| {
+			type: 'context_compaction';
+			id: string;
+			summary: string;
+			status?: 'in_progress' | 'failed';
 	  };
 
 type ResponseStreamEvent = {
@@ -135,7 +160,7 @@ function getReasoningText(item: OutputItem): string {
 	return getTextFromParts(summary ?? item.content ?? []);
 }
 
-function getToolResultText(item?: OutputItem): string {
+export function getToolResultText(item?: OutputItem): string {
 	return (item?.output ?? [])
 		.filter((part) => part?.type !== 'input_image')
 		.map((part) => {
@@ -174,14 +199,15 @@ function getInlineFileFromToolOutput(callItem?: OutputItem, resultItem?: OutputI
 	}
 
 	const result = parseJSONStringValue(getToolResultText(resultItem)) as Record<string, unknown>;
+	const isTerminalFile = result?.source === 'open_terminal' && !!result.terminal_selector;
+	const isOpenWebUIFile = result?.source === 'open_webui';
 	if (
 		!result ||
 		typeof result !== 'object' ||
 		result.type !== 'file' ||
-		result.source !== 'open_terminal' ||
-		result.exists === false ||
 		!result.path ||
-		!result.terminal_selector
+		result.exists === false ||
+		!(isTerminalFile || isOpenWebUIFile)
 	) {
 		return null;
 	}
@@ -191,7 +217,10 @@ function getInlineFileFromToolOutput(callItem?: OutputItem, resultItem?: OutputI
 		: result;
 }
 
-function buildToolCallToken(item: OutputItem, toolOutputByCallId: Record<string, OutputItem>) {
+export function buildToolCallToken(
+	item: OutputItem,
+	toolOutputByCallId: Record<string, OutputItem>
+) {
 	const callId = item.call_id ?? item.id ?? '';
 	const resultItem = toolOutputByCallId[callId];
 	const status = String(item.status ?? '');
@@ -213,6 +242,7 @@ function buildToolCallToken(item: OutputItem, toolOutputByCallId: Record<string,
 		}
 	}
 
+	const text = getToolResultText(resultItem);
 	return {
 		summary: isPending
 			? 'Tool Approval Needed'
@@ -221,16 +251,26 @@ function buildToolCallToken(item: OutputItem, toolOutputByCallId: Record<string,
 				: isExecuting
 					? 'Executing...'
 					: 'Preparing...',
-		text: getToolResultText(resultItem),
+		text,
+		view: agentView(item, text) ?? terminalView(item, text),
 		attributes: {
 			type: 'tool_calls',
 			id: callId,
 			name,
+			running_label:
+				typeof item.display_labels?.running === 'string' ? item.display_labels.running : '',
+			display_label:
+				typeof item.display_labels?.completed === 'string'
+					? item.display_labels.completed
+					: typeof item.display_label === 'string'
+						? item.display_label
+						: '',
 			done: isDone ? 'true' : 'false',
 			status,
-			arguments: stringifyAttribute(item.arguments ?? ''),
-			files: stringifyAttribute(resultItem?.files),
-			embeds: stringifyAttribute(resultItem?.embeds)
+			// ToolCallDisplay HTML-decodes these, like legacy <details> attributes.
+			arguments: encode(stringifyAttribute(item.arguments ?? '')),
+			files: encode(stringifyAttribute(resultItem?.files)),
+			embeds: encode(stringifyAttribute(resultItem?.embeds))
 		}
 	};
 }
@@ -341,6 +381,14 @@ function buildDetailToken(
 	return null;
 }
 
+export function isHiddenToolCall(item: OutputItem): boolean {
+	return (
+		item.type === 'function_call' &&
+		item.hidden === true &&
+		!['pending', 'queued', 'requires_approval'].includes(item.status ?? '')
+	);
+}
+
 export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDisplayItem[] {
 	const displayItems: OutputDisplayItem[] = [];
 	const currentDetailTokens: OutputDetailToken[] = [];
@@ -377,8 +425,19 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 			return;
 		}
 
+		for (const call of getDispatchedVisualizationPreviews(item)) {
+			flushDetails();
+			displayItems.push({ type: 'visualization', id: `visualization:${call.call_id}`, call });
+		}
+
+		if (isHiddenToolCall(item)) {
+			return;
+		}
+
 		if (item.type === 'function_call_output') {
-			const inlineFile = getInlineFileFromToolOutput(toolCallByCallId[item.call_id ?? ''], item);
+			const call = toolCallByCallId[item.call_id ?? ''];
+			if (call && isHiddenToolCall(call)) return;
+			const inlineFile = getInlineFileFromToolOutput(call, item);
 			if (inlineFile) {
 				flushDetails();
 				displayItems.push({
@@ -398,11 +457,39 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 			return;
 		}
 
+		if (
+			item.type === 'function_call' &&
+			item.tool_type === 'builtin' &&
+			item.tool_id === 'builtin:render_visualization' &&
+			(item.call_id || item.id)
+		) {
+			flushDetails();
+			const callId = item.call_id ?? item.id!;
+			displayItems.push({
+				type: 'visualization',
+				id: `visualization:${callId}`,
+				call: item,
+				result: toolOutputByCallId[callId]
+			});
+			return;
+		}
+
 		if (item.type && GROUPABLE_OUTPUT_TYPES.has(item.type)) {
 			const token = buildDetailToken(item, index === output.length - 1, toolOutputByCallId);
 			if (token) {
 				currentDetailTokens.push(token);
 			}
+			return;
+		}
+
+		if (item.type === 'open_webui:context_compaction') {
+			flushDetails();
+			displayItems.push({
+				type: 'context_compaction',
+				id: item.id ?? `context-compaction-${index}`,
+				summary: typeof item.summary === 'string' ? item.summary : '',
+				status: item.status === 'in_progress' || item.status === 'failed' ? item.status : undefined
+			});
 			return;
 		}
 
@@ -414,6 +501,20 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 					type: 'message',
 					id: item.id ?? `message-${index}`,
 					text
+				});
+			}
+			return;
+		}
+
+		if (item.type === 'image_generation_call') {
+			if (typeof item.result === 'string' && item.result) {
+				flushDetails();
+				displayItems.push({
+					type: 'image',
+					id: item.id ?? `image-${index}`,
+					src: item.result.startsWith('data:')
+						? item.result
+						: `data:image/${item.output_format || 'png'};base64,${item.result}`
 				});
 			}
 			return;
@@ -431,6 +532,16 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 	});
 
 	flushDetails();
+
+	// Providers can reuse item ids across tool-call rounds.
+	const seenIds = new Set<string>();
+	displayItems.forEach((displayItem, index) => {
+		if (seenIds.has(displayItem.id)) {
+			displayItem.id = `${displayItem.id}-${index}`;
+		}
+		seenIds.add(displayItem.id);
+	});
+
 	return displayItems;
 }
 
@@ -499,7 +610,7 @@ function findOutputItemIndex(output: OutputItem[], item: OutputItem): number {
 	return output.findIndex(
 		(existing) =>
 			(!!item.id && existing?.id === item.id) ||
-			(!!item.call_id && existing?.call_id === item.call_id)
+			(!!item.call_id && existing?.type === item.type && existing?.call_id === item.call_id)
 	);
 }
 
@@ -522,7 +633,19 @@ export function applyResponseStreamEvent(
 	}
 
 	if (eventType === 'response.completed') {
-		return event.response?.output ? [...event.response.output] : output;
+		if (!event.response?.output?.length) return output;
+
+		// Completion covers one provider response, not the earlier tool-call rounds.
+		const nextOutput = [...output];
+		for (const item of event.response.output) {
+			const index = findOutputItemIndex(nextOutput, item);
+			if (index >= 0) {
+				nextOutput[index] = item;
+			} else {
+				nextOutput.push(item);
+			}
+		}
+		return nextOutput;
 	}
 
 	const nextOutput = [...output];
@@ -593,7 +716,7 @@ export function applyResponseStreamEvent(
 		if (!event.part) {
 			return nextOutput;
 		}
-		item.summary = [...(item.summary ?? [])];
+		item.summary = Array.isArray(item.summary) ? [...item.summary] : [];
 		const summaryIndex = event.summary_index ?? item.summary.length;
 		setPart(item.summary, summaryIndex, { ...event.part }, { type: 'summary_text', text: '' });
 		return nextOutput;
@@ -608,9 +731,14 @@ export function applyResponseStreamEvent(
 
 		if (deltaType === 'reasoning_summary_text') {
 			const summaryIndex = event.summary_index ?? 0;
-			item.summary = [...(item.summary ?? [])];
+			item.summary = Array.isArray(item.summary) ? [...item.summary] : [];
 			const part = ensurePart(item.summary, summaryIndex, { type: 'summary_text', text: '' });
 			part.text = appendDelta(part.text ?? '', event.delta);
+			return nextOutput;
+		}
+
+		if (item.type === 'open_webui:code_interpreter') {
+			item.code = `${item.code ?? ''}${event.delta ?? ''}`;
 			return nextOutput;
 		}
 
@@ -669,7 +797,7 @@ export function replaceOutputMessageText(
 		const part = nextContent[partIndex];
 		nextContent[partIndex] = {
 			...part,
-			text: (part.text as string).replace(oldContent, newContent)
+			text: (part.text as string).replace(oldContent, () => newContent)
 		};
 
 		return {
@@ -679,4 +807,63 @@ export function replaceOutputMessageText(
 	});
 
 	return replaced ? nextOutput : output;
+}
+
+export function setOutputText(output: OutputItem[], text: string): OutputItem[] {
+	if (text === getOutputText(output)) {
+		return output;
+	}
+
+	const lastMessage = output.filter((item) => item?.type === 'message').at(-1);
+	if (!lastMessage) {
+		return [
+			...output,
+			{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }
+		];
+	}
+
+	return output.map((item) =>
+		item?.type === 'message'
+			? { ...item, content: item === lastMessage ? [{ type: 'output_text', text }] : [] }
+			: item
+	);
+}
+
+function parseToolArguments(args: unknown): Record<string, unknown> {
+	if (!args) {
+		return {};
+	}
+	let value = args;
+	while (typeof value === 'string') {
+		try {
+			value = JSON.parse(value);
+		} catch {
+			break;
+		}
+	}
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
+export function getPendingAskUserFromMessage<T extends { role?: string; output?: unknown }>(
+	message: T
+) {
+	if (message?.role !== 'assistant' || !Array.isArray(message.output)) {
+		return null;
+	}
+
+	const call = message.output.find(
+		(item: OutputItem) =>
+			item?.type === 'function_call' &&
+			item?.name === 'ask_user' &&
+			item?.status === 'pending' &&
+			(item?.call_id || item?.id)
+	);
+
+	if (call) {
+		return { message, call, args: parseToolArguments(call.arguments) };
+	}
+
+	return null;
 }

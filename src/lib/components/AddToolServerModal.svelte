@@ -5,8 +5,8 @@
 	const { saveAs } = fileSaver;
 
 	import { toast } from 'svelte-sonner';
-	import { getContext, onMount } from 'svelte';
-	const i18n = getContext('i18n');
+	import { getContext, tick } from 'svelte';
+	const i18n = getContext<any>('i18n');
 
 	import Modal from '$lib/components/common/Modal.svelte';
 	import Plus from '$lib/components/icons/Plus.svelte';
@@ -16,7 +16,7 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Tags from './common/Tags.svelte';
-	import { getToolServerData } from '$lib/apis';
+	import { slugify } from '$lib/utils';
 	import {
 		verifyToolServerConnection,
 		registerOAuthClient,
@@ -35,8 +35,7 @@
 	export let show = false;
 	export let edit = false;
 
-	export let direct = false;
-	export let connection = null;
+	export let connection: any = null;
 
 	let inputElement = null;
 
@@ -49,6 +48,7 @@
 	let path = 'openapi.json';
 
 	let auth_type = 'bearer';
+	let forwardCookies = false;
 	let key = '';
 	let headers = '';
 
@@ -78,18 +78,23 @@
 	const selectClass =
 		'bg-transparent pr-5 outline-hidden placeholder:text-gray-300 dark:placeholder:text-gray-700';
 	const oauthAuthTypes = ['oauth_2.1', 'oauth_2.1_static'];
-	const verifyLabel = () =>
-		oauthAuthTypes.includes(auth_type)
-			? $i18n.t('Check OAuth Discovery')
-			: $i18n.t('Verify Connection');
+	$: verifyLabel = oauthAuthTypes.includes(auth_type)
+		? $i18n.t('Check OAuth Discovery')
+		: $i18n.t('Verify Connection');
 	const verifySuccessMessage = () =>
 		oauthAuthTypes.includes(auth_type)
 			? $i18n.t('OAuth discovery successful')
 			: $i18n.t('Connection successful');
 
+	const ensureConnectionId = () => {
+		if (type === 'mcp' && !edit && !id.trim()) {
+			id = slugify(name.trim()) || uuidv4();
+		}
+	};
+
 	const authorizeOAuthHandler = () => {
 		if (!id) {
-			toast.error($i18n.t('Please enter a valid ID'));
+			toast.error($i18n.t('Please enter a Connection ID before authorizing OAuth.'));
 			return;
 		}
 
@@ -111,13 +116,14 @@
 			return;
 		}
 
-		if (id === '') {
-			toast.error($i18n.t('Please enter a valid ID'));
+		if (auth_type === 'oauth_2.1_static' && (!oauthClientId || !oauthClientSecret)) {
+			toast.error($i18n.t('Please enter Client ID and Client Secret'));
 			return;
 		}
 
-		if (auth_type === 'oauth_2.1_static' && (!oauthClientId || !oauthClientSecret)) {
-			toast.error($i18n.t('Please enter Client ID and Client Secret'));
+		ensureConnectionId();
+		if (!id.trim()) {
+			toast.error($i18n.t('Enter a Connection ID to register.'));
 			return;
 		}
 
@@ -145,10 +151,9 @@
 		});
 
 		if (res) {
+			// $i18n.t('Please save the connection to persist the OAuth client information and do not change the ID');
 			toast.warning(
-				$i18n.t(
-					'Please save the connection to persist the OAuth client information and do not change the ID'
-				)
+				$i18n.t('Save the connection to keep the OAuth details. Keep the Connection ID unchanged.')
 			);
 			toast.success($i18n.t('Registration successful'));
 
@@ -189,50 +194,36 @@
 			}
 		}
 
-		if (direct) {
-			const res = await getToolServerData(
-				auth_type === 'bearer' ? key : localStorage.token,
-				path.includes('://') ? path : `${url}${path.startsWith('/') ? '' : '/'}${path}`
-			).catch((err) => {
-				toast.error($i18n.t('Connection failed'));
-			});
-
-			if (res) {
-				toast.success($i18n.t('Connection successful'));
-				console.debug('Connection successful', res);
+		const res = await verifyToolServerConnection(localStorage.token, {
+			url,
+			path,
+			type,
+			auth_type,
+			headers: headers ? JSON.parse(headers) : undefined,
+			key,
+			config: {
+				enable: enable,
+				access_grants: accessGrants
+			},
+			info: {
+				id,
+				name,
+				description,
+				...(oauthAuthTypes.includes(auth_type)
+					? {
+							...(oauthServerUrl ? { oauth_server_url: oauthServerUrl } : {}),
+							...(oauthScope ? { oauth_scope: oauthScope } : {}),
+							oauth_resource_parameter: oauthResourceParameter
+						}
+					: {})
 			}
-		} else {
-			const res = await verifyToolServerConnection(localStorage.token, {
-				url,
-				path,
-				type,
-				auth_type,
-				headers: headers ? JSON.parse(headers) : undefined,
-				key,
-				config: {
-					enable: enable,
-					access_grants: accessGrants
-				},
-				info: {
-					id,
-					name,
-					description,
-					...(oauthAuthTypes.includes(auth_type)
-						? {
-								...(oauthServerUrl ? { oauth_server_url: oauthServerUrl } : {}),
-								...(oauthScope ? { oauth_scope: oauthScope } : {}),
-								oauth_resource_parameter: oauthResourceParameter
-							}
-						: {})
-				}
-			}).catch((err) => {
-				toast.error($i18n.t('Connection failed'));
-			});
+		}).catch((err) => {
+			toast.error($i18n.t('Connection failed'));
+		});
 
-			if (res) {
-				toast.success(verifySuccessMessage());
-				console.debug('Connection successful', res);
-			}
+		if (res) {
+			toast.success(verifySuccessMessage());
+			console.debug('Connection successful', res);
 		}
 	};
 
@@ -241,7 +232,7 @@
 		if (!file) return;
 
 		const reader = new FileReader();
-		reader.onload = (event) => {
+		reader.onload = async (event) => {
 			const json = event.target.result;
 			console.log('importHandler', json);
 
@@ -264,6 +255,7 @@
 				if (data.path) path = data.path;
 
 				if (data.auth_type) auth_type = data.auth_type;
+				forwardCookies = data.forward_cookies ?? false;
 				if (data.headers) headers = JSON.stringify(data.headers, null, 2);
 				if (data.key) key = data.key;
 
@@ -278,6 +270,11 @@
 				if (data.config) {
 					enable = data.config.enable ?? true;
 					accessGrants = data.config.access_grants ?? [];
+				}
+
+				if (data.info?.id) {
+					await tick();
+					id = data.info.id;
 				}
 
 				toast.success($i18n.t('Import successful'));
@@ -300,6 +297,7 @@
 				path,
 
 				auth_type,
+				...(['', 'openapi'].includes(type) ? { forward_cookies: forwardCookies } : {}),
 				headers: headers ? JSON.parse(headers) : undefined,
 				key,
 
@@ -326,6 +324,7 @@
 
 	const submitHandler = async () => {
 		loading = true;
+		ensureConnectionId();
 
 		// remove trailing slash from url for non-MCP connections
 		// MCP servers may require a trailing slash; stripping it can cause
@@ -334,7 +333,11 @@
 			url = url.replace(/\/$/, '');
 		}
 		if (id.includes(':') || id.includes('|')) {
-			toast.error($i18n.t('ID cannot contain ":" or "|" characters'));
+			toast.error(
+				type === 'mcp'
+					? $i18n.t('Connection ID cannot contain ":" or "|" characters')
+					: $i18n.t('ID cannot contain ":" or "|" characters')
+			);
 			loading = false;
 			return;
 		}
@@ -380,6 +383,7 @@
 			path,
 
 			auth_type,
+			...(['', 'openapi'].includes(type) ? { forward_cookies: forwardCookies } : {}),
 			headers: headers ? JSON.parse(headers) : undefined,
 
 			key,
@@ -424,6 +428,7 @@
 
 		key = '';
 		auth_type = 'bearer';
+		forwardCookies = false;
 
 		id = '';
 		name = '';
@@ -439,9 +444,12 @@
 		enable = true;
 		functionNameFilterList = '';
 		accessGrants = [];
+		headers = '';
+		showAdvanced = false;
 	};
 
-	const init = () => {
+	const init = async () => {
+		forwardCookies = connection?.forward_cookies ?? false;
 		if (connection) {
 			type = connection?.type ?? 'openapi';
 			url = connection.url;
@@ -468,6 +476,11 @@
 			enable = connection.config?.enable ?? true;
 			functionNameFilterList = connection.config?.function_name_filter_list ?? '';
 			accessGrants = connection.config?.access_grants ?? [];
+
+			if (connection.info?.id) {
+				await tick();
+				id = connection.info.id;
+			}
 		}
 	};
 
@@ -475,12 +488,16 @@
 		init();
 	}
 
-	onMount(() => {
-		init();
-	});
+	$: if (show && type === 'mcp' && !edit && !oauthClientInfo && name) {
+		id = slugify(name.trim());
+	}
 </script>
 
-<Modal size="sm" bind:show>
+<Modal
+	ariaLabel={edit ? $i18n.t('Edit Connection') : $i18n.t('Add Connection')}
+	size="sm"
+	bind:show
+>
 	<div>
 		<div class=" flex justify-between dark:text-gray-100 px-5 pt-4 pb-2">
 			<h1 class=" text-lg font-medium self-center font-primary">
@@ -544,26 +561,20 @@
 								<div class=" text-xs text-gray-500">{$i18n.t('Type')}</div>
 
 								<div class="">
-									{#if !direct}
-										<button
-											on:click={() => {
-												type = ['', 'openapi'].includes(type) ? 'mcp' : 'openapi';
-											}}
-											type="button"
-											class=" text-xs text-gray-700 dark:text-gray-300"
-										>
-											{#if ['', 'openapi'].includes(type)}
-												{$i18n.t('OpenAPI')}
-											{:else if type === 'mcp'}
-												{$i18n.t('MCP')}
-												<span class="text-gray-500">{$i18n.t('Streamable HTTP')}</span>
-											{/if}
-										</button>
-									{:else}
-										<div class="text-xs text-gray-700 dark:text-gray-300">
-											{$i18n.t('OpenAPI')}
-										</div>
-									{/if}
+									<button
+										on:click={() => {
+											type = ['', 'openapi'].includes(type) ? 'mcp' : 'openapi';
+										}}
+										type="button"
+										class=" text-xs text-gray-700 dark:text-gray-300"
+									>
+										{#if ['', 'openapi'].includes(type)}
+											{$i18n.t('settings.admin.integrations.openApi.label')}
+										{:else if type === 'mcp'}
+											{$i18n.t('settings.admin.integrations.mcp.label')}
+											<span class="text-gray-500">{$i18n.t('Streamable HTTP')}</span>
+										{/if}
+									</button>
 								</div>
 							</div>
 						</div>
@@ -585,28 +596,41 @@
 									/>
 								</div>
 							</div>
-							{#if !direct}
-								<div class="flex flex-col flex-1">
-									<div class="flex justify-between mb-0.5">
-										<label for="enter-id" class={`text-xs text-gray-500`}
-											>{$i18n.t('ID')}
-											{#if type !== 'mcp'}<span class="opacity-50">({$i18n.t('optional')})</span
-												>{/if}</label
-										>
-									</div>
-									<div class="flex flex-1 items-center">
-										<input
-											id="enter-id"
-											class={`w-full flex-1 text-sm font-mono ${inputClass}`}
-											type="text"
-											bind:value={id}
-											placeholder="auto"
-											autocomplete="off"
-											required={type === 'mcp'}
-										/>
-									</div>
+							<div class="flex flex-col flex-1">
+								<div class="flex justify-between mb-0.5">
+									<label for="enter-id" class={`text-xs text-gray-500`}>
+										{#if type === 'mcp'}
+											{$i18n.t('Connection ID')}
+										{:else}
+											{$i18n.t('ID')}
+											<span class="opacity-50">({$i18n.t('optional')})</span>
+										{/if}</label
+									>
 								</div>
-							{/if}
+								<Tooltip
+									className="flex flex-1 items-center"
+									tippyOptions={{ trigger: 'mouseenter focusin' }}
+									content={type === 'mcp' && oauthAuthTypes.includes(auth_type)
+										? edit
+											? $i18n.t(
+													'Identifies this connection in Open WebUI, separately from the OAuth client ID.'
+												)
+											: $i18n.t(
+													'Generated from the name, or enter your own. Identifies this connection in Open WebUI, separately from the OAuth client ID.'
+												)
+										: ''}
+								>
+									<input
+										id="enter-id"
+										class={`w-full flex-1 text-sm font-mono ${inputClass}`}
+										type="text"
+										bind:value={id}
+										placeholder="auto"
+										autocomplete="off"
+										required={type === 'mcp' && edit}
+									/>
+								</Tooltip>
+							</div>
 						</div>
 
 						<div class="flex flex-col w-full mt-1 mb-1.5">
@@ -643,13 +667,13 @@
 										required
 									/>
 
-									<Tooltip content={verifyLabel()} className="shrink-0 flex items-center mr-1">
+									<Tooltip content={verifyLabel} className="shrink-0 flex items-center mr-1">
 										<button
 											class="self-center p-1 bg-transparent hover:bg-gray-100 dark:hover:bg-gray-850 rounded-lg transition"
 											on:click={() => {
 												verifyHandler();
 											}}
-											aria-label={verifyLabel()}
+											aria-label={verifyLabel}
 											type="button"
 										>
 											<svg
@@ -679,9 +703,9 @@
 							<div class="flex flex-col w-full">
 								<div class="flex justify-between items-center">
 									<div class="flex gap-2 items-center">
-										<div for="select-bearer-or-session" class={`text-xs text-gray-500`}>
+										<label for="select-bearer-or-session" class={`text-xs text-gray-500`}>
 											{$i18n.t('Auth')}
-										</div>
+										</label>
 									</div>
 
 									{#if oauthAuthTypes.includes(auth_type)}
@@ -752,12 +776,10 @@
 											<option value="bearer">{$i18n.t('Bearer')}</option>
 											<option value="session">{$i18n.t('Session')}</option>
 
-											{#if !direct}
-												<option value="system_oauth">{$i18n.t('OAuth')}</option>
-												{#if type === 'mcp'}
-													<option value="oauth_2.1">{$i18n.t('OAuth 2.1')}</option>
-													<option value="oauth_2.1_static">{$i18n.t('OAuth 2.1 (Static)')}</option>
-												{/if}
+											<option value="system_oauth">{$i18n.t('OAuth')}</option>
+											{#if type === 'mcp'}
+												<option value="oauth_2.1">{$i18n.t('OAuth 2.1')}</option>
+												<option value="oauth_2.1_static">{$i18n.t('OAuth 2.1 (Static)')}</option>
 											{/if}
 										</select>
 									</div>
@@ -836,33 +858,49 @@
 								{$i18n.t('Advanced')}
 							</button>
 
-							{#if !direct}
-								<AccessButton
-									className="mt-2"
-									on:click={() => {
-										showAccessControlModal = true;
-									}}
-									label={$i18n.t('Access Control')}
-								/>
-							{/if}
+							<AccessButton
+								className="mt-2"
+								on:click={() => {
+									showAccessControlModal = true;
+								}}
+								label={$i18n.t('Access Control')}
+							/>
 						</div>
 
 						{#if showAdvanced}
+							{#if ['', 'openapi'].includes(type)}
+								<div class="flex items-center justify-between gap-3 mt-2">
+									<div>
+										<label for="forward-cookies" class="text-xs text-gray-500">
+											{$i18n.t('Forward cookies')}
+										</label>
+										<p class="text-xs text-gray-500">
+											{$i18n.t('Forward cookies from your Open WebUI request to this server.')}
+										</p>
+									</div>
+									<Switch
+										id="forward-cookies"
+										ariaLabel={$i18n.t('Forward cookies')}
+										bind:state={forwardCookies}
+									/>
+								</div>
+							{/if}
+
 							{#if ['', 'openapi'].includes(type)}
 								<div class="flex gap-2 mt-2">
 									<div class="flex flex-col w-full">
 										<div class="flex justify-between items-center mb-0.5">
 											<div class="flex gap-2 items-center">
-												<div for="select-bearer-or-session" class={`text-xs text-gray-500`}>
+												<label for="select-openapi-spec-type" class={`text-xs text-gray-500`}>
 													{$i18n.t('OpenAPI Spec')}
-												</div>
+												</label>
 											</div>
 										</div>
 
 										<div class="flex gap-2">
 											<div class="flex-shrink-0 self-start">
 												<select
-													id="select-bearer-or-session"
+													id="select-openapi-spec-type"
 													class={`w-full text-sm ${selectClass}`}
 													bind:value={spec_type}
 												>
@@ -889,8 +927,9 @@
 													</div>
 												{:else if spec_type === 'json'}
 													<div class={`text-xs w-full self-center translate-y-[1px] text-gray-500`}>
-														<label for="url-or-path" class="sr-only">{$i18n.t('JSON Spec')}</label>
+														<label for="json-spec" class="sr-only">{$i18n.t('JSON Spec')}</label>
 														<textarea
+															id="json-spec"
 															class={`w-full text-sm ${inputClass}`}
 															bind:value={spec}
 															placeholder={$i18n.t('JSON Spec')}
@@ -957,55 +996,51 @@
 								</div>
 							{/if}
 
-							{#if !direct}
-								<div class="flex gap-2 mt-2">
-									<div class="flex flex-col w-full">
-										<label
-											for="headers-input"
-											class={`mb-0.5 text-xs text-gray-500
-									`}>{$i18n.t('Headers')}</label
+							<div class="flex gap-2 mt-2">
+								<div class="flex flex-col w-full">
+									<label
+										for="headers-input"
+										class={`mb-0.5 text-xs text-gray-500
+								`}>{$i18n.t('Headers')}</label
+									>
+
+									<div class="flex-1">
+										<Tooltip
+											content={$i18n.t(
+												'Enter additional headers in JSON format (e.g. {"X-Custom-Header": "value"}'
+											)}
 										>
-
-										<div class="flex-1">
-											<Tooltip
-												content={$i18n.t(
-													'Enter additional headers in JSON format (e.g. {"X-Custom-Header": "value"}'
-												)}
-											>
-												<Textarea
-													className="w-full text-sm outline-hidden"
-													bind:value={headers}
-													placeholder={$i18n.t('Enter additional headers in JSON format')}
-													required={false}
-													minSize={30}
-												/>
-											</Tooltip>
-										</div>
+											<Textarea
+												className="w-full text-sm outline-hidden"
+												bind:value={headers}
+												placeholder={$i18n.t('Enter additional headers in JSON format')}
+												required={false}
+												minSize={30}
+											/>
+										</Tooltip>
 									</div>
-								</div>
-							{/if}
-						{/if}
-
-						{#if !direct}
-							<hr class=" border-gray-100/50 dark:border-gray-700/10 my-2.5 w-full" />
-
-							<div class="flex flex-col w-full mt-2">
-								<label for="function-name-filter-list" class={`mb-1 text-xs text-gray-500`}
-									>{$i18n.t('Function Name Filter List')}</label
-								>
-
-								<div class="flex-1">
-									<input
-										id="function-name-filter-list"
-										class={`w-full text-sm ${inputClass}`}
-										type="text"
-										bind:value={functionNameFilterList}
-										placeholder={$i18n.t('Enter function name filter list (e.g. func1, !func2)')}
-										autocomplete="off"
-									/>
 								</div>
 							</div>
 						{/if}
+
+						<hr class=" border-gray-100/50 dark:border-gray-700/10 my-2.5 w-full" />
+
+						<div class="flex flex-col w-full mt-2">
+							<label for="function-name-filter-list" class={`mb-1 text-xs text-gray-500`}
+								>{$i18n.t('Function Name Filter List')}</label
+							>
+
+							<div class="flex-1">
+								<input
+									id="function-name-filter-list"
+									class={`w-full text-sm ${inputClass}`}
+									type="text"
+									bind:value={functionNameFilterList}
+									placeholder={$i18n.t('Enter function name filter list (e.g. func1, !func2)')}
+									autocomplete="off"
+								/>
+							</div>
+						</div>
 					</div>
 
 					{#if type === 'mcp'}
@@ -1044,9 +1079,7 @@
 						</div>
 
 						<button
-							class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full flex items-center gap-2 whitespace-nowrap {loading
-								? ' cursor-not-allowed'
-								: ''}"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white disabled:cursor-not-allowed"
 							type="submit"
 							disabled={loading}
 						>
@@ -1054,7 +1087,7 @@
 
 							{#if loading}
 								<span class="shrink-0">
-									<Spinner />
+									<Spinner className="size-3" />
 								</span>
 							{/if}
 						</button>

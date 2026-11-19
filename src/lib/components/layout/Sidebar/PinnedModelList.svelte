@@ -45,7 +45,9 @@
 							...$pinnedModels.filter((id) => !$visiblePinnedModels.includes(id))
 						]
 					});
-					await updateUserSettings(localStorage.token, { ui: $settings });
+					await updateUserSettings(localStorage.token, {
+						ui: { pinnedModels: $settings.pinnedModels }
+					});
 				}
 			});
 		}
@@ -57,7 +59,7 @@
 	});
 </script>
 
-<div class="mt-0.5 pb-1.5" id="pinned-models-list">
+<div class="mt-0.5 pb-1.5" id="pinned-models-list" role="list">
 	{#each $visiblePinnedModels as modelId (modelId)}
 		<PinnedModelItem
 			model={$models.find((model) => model.id === modelId)}
@@ -74,7 +76,7 @@
 					...$settings,
 					pinnedModels: $pinnedModels.filter((id) => id !== modelId)
 				});
-				updateUserSettings(localStorage.token, { ui: $settings });
+				updateUserSettings(localStorage.token, { ui: { pinnedModels: $settings.pinnedModels } });
 			}}
 		/>
 	{/each}

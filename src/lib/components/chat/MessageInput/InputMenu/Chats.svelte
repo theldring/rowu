@@ -3,21 +3,21 @@
 	import { onDestroy, onMount, tick, getContext } from 'svelte';
 
 	import { decodeString } from '$lib/utils';
-	import { getChatList, getChatListBySearchText } from '$lib/apis/chats';
+	import { getChatList, getChatListBySearchText, getChatSearchSnippet } from '$lib/apis/chats';
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Loader from '$lib/components/common/Loader.svelte';
-	import { chatId } from '$lib/stores';
 	import SearchInput from './SearchInput.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
 
+	export let chatId: string = '';
 	export let onSelect = (e) => {};
 
 	let loaded = false;
 
-	let items = [];
+	let items: { id: string; name: string; updated_at: number; snippet?: string | null }[] = [];
 	let selectedIdx = 0;
 	let query = '';
 
@@ -28,6 +28,18 @@
 	let searchedQuery = '';
 	let searchDebounceTimer: ReturnType<typeof setTimeout>;
 	let requestId = 0;
+
+	const loadSnippet = async (item: { id: string; snippet?: string | null }) => {
+		if (!searchedQuery.trim() || item.snippet !== undefined) return;
+		item.snippet = null;
+		try {
+			item.snippet = await getChatSearchSnippet(localStorage.token, item.id, searchedQuery);
+			items = items;
+		} catch (error) {
+			item.snippet = undefined;
+			console.error(error);
+		}
+	};
 
 	// Only re-run the search when the query actually changes. Flipping `initialized`
 	// after the initial load would otherwise trigger a second, identical request.
@@ -78,13 +90,13 @@
 		items = [
 			...items,
 			...res
-				.filter((item) => item?.id !== $chatId)
+				.filter((item) => item?.id !== chatId)
 				.map((item) => {
 					return {
 						...item,
+						snippet: undefined,
 						type: 'chat',
-						name: item.title,
-						description: item.snippet || dayjs(item.updated_at * 1000).fromNow()
+						name: item.title
 					};
 				})
 		];
@@ -141,8 +153,12 @@
 						>
 							<div class="text-black dark:text-gray-100 flex items-center gap-1.5">
 								<Tooltip
-									content={item.description || decodeString(item?.name)}
+									content={item.snippet ||
+										dayjs(item.updated_at * 1000)
+											.locale($i18n.language)
+											.fromNow()}
 									placement="top-start"
+									tippyOptions={{ onShown: () => loadSnippet(item) }}
 								>
 									<div class="line-clamp-1 flex-1">
 										{decodeString(item?.name)}

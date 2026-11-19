@@ -1,5 +1,11 @@
 <script lang="ts">
+	import { applyTetherToken } from '$lib/utils/tether';
+
 	import DOMPurify from 'dompurify';
+	import MfaChallengeForm from '$lib/components/auth/MfaChallenge.svelte';
+	import { mfaRequest, type MfaChallenge } from '$lib/apis/auths/mfa';
+	let mfaChallenge: MfaChallenge | null = null;
+	let pendingApproval = false;
 	import { marked } from 'marked';
 
 	import { toast } from 'svelte-sonner';
@@ -46,7 +52,26 @@
 
 	const setSessionUser = async (sessionUser, redirectPath: string | null = null) => {
 		if (sessionUser) {
-			console.log(sessionUser);
+			if (sessionUser.next_step === 'pending') {
+				pendingApproval = true;
+				return;
+			}
+			if (sessionUser.challenge_token) {
+				mfaChallenge = sessionUser;
+				password = '';
+				confirmPassword = '';
+				return;
+			}
+			if (window.tether && sessionUser.token) {
+				try {
+					const access = await window.tether.signedIn(sessionUser.token);
+					sessionUser = { ...sessionUser, token: access.token, expires_at: access.expiresAt };
+					await applyTetherToken(access);
+				} catch (error) {
+					toast.error(String(error));
+					return;
+				}
+			}
 			toast.success($i18n.t(`You're now logged in.`));
 			if (sessionUser.token) {
 				localStorage.token = sessionUser.token;
@@ -62,10 +87,11 @@
 			}
 
 			if (!redirectPath) {
-				redirectPath = $page.url.searchParams.get('redirect') || '/';
+				redirectPath =
+					sessionStorage.getItem('auth:continue') || $page.url.searchParams.get('redirect') || '/';
 			}
 
-			goto(redirectPath);
+			await goto(redirectPath);
 			localStorage.removeItem('redirectPath');
 		}
 	};
@@ -148,7 +174,10 @@
 		}
 
 		localStorage.token = token;
-		await setSessionUser(sessionUser, localStorage.getItem('redirectPath') || null);
+		await setSessionUser(
+			sessionUser,
+			sessionStorage.getItem('auth:continue') || localStorage.getItem('redirectPath') || null
+		);
 	};
 
 	let onboarding = false;
@@ -170,7 +199,22 @@
 			toast.error(error);
 		}
 
-		await oauthCallbackHandler();
+		if ($page.url.searchParams.has('mfa')) {
+			localStorage.removeItem('token');
+			try {
+				mfaChallenge = await mfaRequest('challenge');
+			} catch (error) {
+				toast.error(error instanceof Error ? error.message : String(error));
+			}
+			loaded = true;
+			return;
+		}
+		if ($page.url.searchParams.has('pending')) {
+			pendingApproval = true;
+			loaded = true;
+			return;
+		}
+		if (!logout) await oauthCallbackHandler();
 		form = $page.url.searchParams.get('form');
 
 		// Auto-redirect to SSO when OAUTH_AUTO_REDIRECT is enabled and the
@@ -221,18 +265,34 @@
 	}}
 />
 
-<div class="w-full h-screen max-h-[100dvh] text-white relative" id="auth-page">
+<div class="w-full h-dvh text-white relative" id="auth-page">
+	<div id="main-content" tabindex="-1" class="sr-only left-0 top-0"></div>
 	<div class="w-full h-full absolute top-0 left-0 bg-white dark:bg-black"></div>
 
 	<div class="w-full absolute top-0 left-0 right-0 h-8 drag-region" />
 
-	{#if loaded}
+	{#if loaded && !onboarding}
 		<div
-			class="fixed bg-transparent min-h-screen w-full flex justify-center z-50 text-black dark:text-white"
+			class="fixed inset-0 h-dvh overflow-y-auto bg-transparent w-full z-50 text-black dark:text-white"
 			id="auth-container"
 		>
-			<div class="w-full px-10 min-h-screen flex flex-col text-center">
-				{#if ($config?.features.auth_trusted_header ?? false) || $config?.features.auth === false}
+			<div class="w-full p-6 min-h-full flex flex-col text-center">
+				{#if mfaChallenge}
+					<div class="my-auto mx-auto w-full sm:max-w-md shrink-0">
+						<MfaChallengeForm
+							challenge={mfaChallenge}
+							onComplete={setSessionUser}
+							onCancel={() => {
+								mfaChallenge = null;
+								window.location.href = '/auth?state=logout&form=signin';
+							}}
+						/>
+					</div>
+				{:else if pendingApproval}
+					<p class="my-auto text-sm text-gray-500 dark:text-gray-400">
+						{$i18n.t('Your account is awaiting administrator approval.')}
+					</p>
+				{:else if ($config?.features.auth_trusted_header ?? false) || $config?.features.auth === false}
 					<div class=" my-auto pb-10 w-full sm:max-w-md">
 						<div
 							class="flex items-center justify-center gap-3 text-xl sm:text-2xl text-center font-normal dark:text-gray-200"
@@ -248,7 +308,10 @@
 					</div>
 				{:else}
 					<div class="my-auto flex flex-col justify-center items-center">
-						<div id="auth-login-card" class=" sm:max-w-md my-auto pb-10 w-full dark:text-gray-100">
+						<div
+							id="auth-login-card"
+							class=" sm:max-w-md my-auto sm:pb-10 w-full dark:text-gray-100"
+						>
 							{#if $config?.metadata?.auth_logo_position === 'center'}
 								<div class="flex justify-center mb-6">
 									<!-- LICENSE covers this Open WebUI sign-in logo.
@@ -297,14 +360,16 @@
 									<div class="flex flex-col mt-4">
 										{#if mode === 'signup'}
 											<div class="mb-2">
-												<label for="name" class="text-sm font-normal text-left mb-1 block"
+												<label
+													for="name"
+													class="text-[0.8125rem] leading-5 font-normal text-left mb-1 block"
 													>{$i18n.t('Name')}</label
 												>
 												<input
 													bind:value={name}
 													type="text"
 													id="name"
-													class="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
+													class="my-0.5 w-full text-[0.8125rem] leading-5 outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
 													autocomplete="name"
 													placeholder={$i18n.t('Enter Your Full Name')}
 													required
@@ -314,13 +379,15 @@
 
 										{#if mode === 'ldap'}
 											<div class="mb-2">
-												<label for="username" class="text-sm font-normal text-left mb-1 block"
+												<label
+													for="username"
+													class="text-[0.8125rem] leading-5 font-normal text-left mb-1 block"
 													>{$i18n.t('Username')}</label
 												>
 												<input
 													bind:value={ldapUsername}
 													type="text"
-													class="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
+													class="my-0.5 w-full text-[0.8125rem] leading-5 outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
 													autocomplete="username"
 													name="username"
 													id="username"
@@ -330,14 +397,17 @@
 											</div>
 										{:else}
 											<div class="mb-2">
-												<label for="email" class="text-sm font-normal text-left mb-1 block"
+												<label
+													for="email"
+													class="text-[0.8125rem] leading-5 font-normal text-left mb-1 block"
 													>{$i18n.t('Email')}</label
 												>
 												<input
 													bind:value={email}
-													type="email"
+													type="text"
+													inputmode="email"
 													id="email"
-													class="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
+													class="my-0.5 w-full text-[0.8125rem] leading-5 outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
 													autocomplete="email"
 													name="email"
 													placeholder={$i18n.t('Enter Your Email')}
@@ -347,14 +417,16 @@
 										{/if}
 
 										<div>
-											<label for="password" class="text-sm font-normal text-left mb-1 block"
+											<label
+												for="password"
+												class="text-[0.8125rem] leading-5 font-normal text-left mb-1 block"
 												>{$i18n.t('Password')}</label
 											>
 											<SensitiveInput
 												bind:value={password}
 												type="password"
 												id="password"
-												class="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
+												class="my-0.5 w-full text-[0.8125rem] leading-5 outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
 												placeholder={$i18n.t('Enter Your Password')}
 												autocomplete={mode === 'signup' ? 'new-password' : 'current-password'}
 												name="password"
@@ -368,14 +440,14 @@
 											<div class="mt-2">
 												<label
 													for="confirm-password"
-													class="text-sm font-normal text-left mb-1 block"
+													class="text-[0.8125rem] leading-5 font-normal text-left mb-1 block"
 													>{$i18n.t('Confirm Password')}</label
 												>
 												<SensitiveInput
 													bind:value={confirmPassword}
 													type="password"
 													id="confirm-password"
-													class="my-0.5 w-full text-sm outline-hidden bg-transparent"
+													class="my-0.5 w-full text-[0.8125rem] leading-5 outline-hidden bg-transparent"
 													placeholder={$i18n.t('Confirm Your Password')}
 													autocomplete="new-password"
 													name="confirm-password"
@@ -389,9 +461,9 @@
 									{#if $config?.features.enable_login_form || $config?.features.enable_ldap || form}
 										{#if mode === 'ldap'}
 											<button
-												class="bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-sm py-2.5 disabled:opacity-50 flex justify-center"
+												class="bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-[0.8125rem] leading-5 py-2.5 aria-disabled:opacity-50 flex justify-center"
 												type="submit"
-												disabled={submitting}
+												aria-disabled={submitting}
 											>
 												<div class="self-center">{$i18n.t('Authenticate')}</div>
 
@@ -403,9 +475,9 @@
 											</button>
 										{:else}
 											<button
-												class="bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-sm py-2.5 disabled:opacity-50 flex justify-center"
+												class="bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-[0.8125rem] leading-5 py-2.5 aria-disabled:opacity-50 flex justify-center"
 												type="submit"
-												disabled={submitting}
+												aria-disabled={submitting}
 											>
 												<div class="self-center">
 													{mode === 'signin'
@@ -423,7 +495,7 @@
 											</button>
 
 											{#if $config?.features.enable_signup && !($config?.onboarding ?? false)}
-												<div class=" mt-4 text-sm text-center">
+												<div class=" mt-4 text-[0.8125rem] leading-5 text-center">
 													{mode === 'signin'
 														? $i18n.t("Don't have an account?")
 														: $i18n.t('Already have an account?')}
@@ -463,7 +535,7 @@
 								<div class="flex flex-col space-y-2">
 									{#if $config?.oauth?.providers?.google}
 										<button
-											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-sm py-2.5"
+											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-[0.8125rem] leading-5 py-2.5"
 											on:click={() => {
 												window.location.href = `${WEBUI_BASE_URL}/oauth/google/login`;
 											}}
@@ -493,7 +565,7 @@
 									{/if}
 									{#if $config?.oauth?.providers?.microsoft}
 										<button
-											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-sm py-2.5"
+											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-[0.8125rem] leading-5 py-2.5"
 											on:click={() => {
 												window.location.href = `${WEBUI_BASE_URL}/oauth/microsoft/login`;
 											}}
@@ -524,7 +596,7 @@
 									{/if}
 									{#if $config?.oauth?.providers?.github}
 										<button
-											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-sm py-2.5"
+											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-[0.8125rem] leading-5 py-2.5"
 											on:click={() => {
 												window.location.href = `${WEBUI_BASE_URL}/oauth/github/login`;
 											}}
@@ -545,7 +617,7 @@
 									{/if}
 									{#if $config?.oauth?.providers?.oidc}
 										<button
-											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-sm py-2.5"
+											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-[0.8125rem] leading-5 py-2.5"
 											on:click={() => {
 												window.location.href = `${WEBUI_BASE_URL}/oauth/oidc/login`;
 											}}
@@ -575,7 +647,7 @@
 									{/if}
 									{#if $config?.oauth?.providers?.feishu}
 										<button
-											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-sm py-2.5"
+											class="flex justify-center items-center bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-normal text-[0.8125rem] leading-5 py-2.5"
 											on:click={() => {
 												window.location.href = `${WEBUI_BASE_URL}/oauth/feishu/login`;
 											}}
@@ -618,8 +690,12 @@
 			</div>
 		</div>
 
-		{#if !$config?.metadata?.auth_logo_position}
-			<div class="fixed m-10 z-50">
+		{#if !$config?.metadata?.auth_logo_position || $config?.metadata?.auth_logo_position === 'top-right'}
+			<div
+				class="fixed top-0 m-10 z-50"
+				class:left-0={!$config?.metadata?.auth_logo_position}
+				class:right-0={$config?.metadata?.auth_logo_position === 'top-right'}
+			>
 				<div class="flex space-x-2">
 					<div class=" self-center">
 						<!-- LICENSE covers this Open WebUI sign-in logo.

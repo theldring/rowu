@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
+	import { safeLinkUrl } from '$lib/utils';
 	import CodeBlock from './CodeBlock.svelte';
 	import Modal from '$lib/components/common/Modal.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
@@ -11,7 +12,7 @@
 	export let codeExecution = null;
 </script>
 
-<Modal size="lg" bind:show>
+<Modal ariaLabel={codeExecution?.name ?? $i18n.t('Code execution')} size="lg" bind:show>
 	<div>
 		<div class="flex justify-between dark:text-gray-300 px-4 pt-3 pb-1">
 			<div class="text-sm font-medium self-center flex flex-col gap-0.5 capitalize">
@@ -44,7 +45,8 @@
 				</div>
 			</div>
 			<button
-				class="self-center rounded-lg p-1 text-gray-500 transition hover:bg-gray-50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+				aria-label={$i18n.t('Close')}
+				class="self-center rounded-lg py-1 text-gray-500 transition hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 px-0"
 				on:click={() => {
 					show = false;
 					codeExecution = null;
@@ -97,7 +99,7 @@
 						<ul class="mt-1 list-disc pl-4 text-xs">
 							{#each codeExecution?.result?.files as file}
 								<li>
-									<a href={file.url} target="_blank">{file.name}</a>
+									<a href={safeLinkUrl(file.url)} target="_blank">{file.name}</a>
 								</li>
 							{/each}
 						</ul>

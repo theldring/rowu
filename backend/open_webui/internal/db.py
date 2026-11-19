@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -27,9 +28,10 @@ from open_webui.env import (
     DATABASE_URL,
     ENABLE_DB_MIGRATIONS,
     OPEN_WEBUI_DIR,
+    USE_SLIM,
 )
 from open_webui.utils.json_codec import JSONCodec
-from sqlalchemy import Dialect, MetaData, create_engine, event, types
+from sqlalchemy import Dialect, MetaData, create_engine, event, text, types
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -41,17 +43,7 @@ from typing_extensions import Self
 log = logging.getLogger(__name__)
 
 
-# ── SSL URL normalization (used by sync engine & Alembic migrations) ─
-#
-# psycopg2 (sync) needs ``sslmode=`` in the connection string (it does
-# not recognise the bare ``ssl=`` key that some ORMs emit).  The helpers
-# below strip all SSL-related query params, normalise them, and
-# reattach them in the canonical libpq form.
-#
-# The **async** engine now uses psycopg (v3), which speaks libpq
-# natively, so it needs no translation at all — the DATABASE_URL is
-# passed through as-is.
-# ─────────────────────────────────────────────────────────────────────
+# Normalize SSL query parameters for sync psycopg2 and Alembic; async psycopg uses the URL unchanged.
 
 
 def _pop_first(params: dict[str, list[str]], key: str) -> str | None:
@@ -121,6 +113,62 @@ extract_ssl_mode_from_url = extract_ssl_params_from_url
 reattach_ssl_mode_to_url = reattach_ssl_params_to_url
 
 
+_SURROGATES = re.compile('[\ud800-\udfff]')
+
+
+def strip_unstorable_json(value):
+    """Drop U+0000 and lone surrogates from every string, keys included."""
+    if isinstance(value, str):
+        return _SURROGATES.sub('', value.replace('\x00', ''))
+    if isinstance(value, dict):
+        return {strip_unstorable_json(k): strip_unstorable_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [strip_unstorable_json(v) for v in value]
+    return value
+
+
+def dumps_json_for_db(value) -> str:
+    """Serialize JSON for storage.
+
+    PostgreSQL's json type stores the ``\\u0000`` escape but every ``->``, ``->>`` and ``#>>``
+    that reaches it fails, so one such row breaks any query navigating the column; lone
+    surrogates are rejected outright. Both are stripped here, the single path every JSON
+    write takes, so no model has to remember to.
+    """
+    serialized = JSONCodec.dumps(value, ensure_ascii=False)
+    # A literally typed backslash-u0000 also matches; the re-dump then leaves it as is.
+    if '\\u0000' in serialized or (not serialized.isascii() and _SURROGATES.search(serialized)):
+        serialized = JSONCodec.dumps(strip_unstorable_json(value), ensure_ascii=False)
+    return serialized
+
+
+async def strip_nul_from_json(db: AsyncSession) -> None:
+    """Rewrite PostgreSQL json values still holding ``\\u0000`` from before ``dumps_json_for_db`` stripped it."""
+    quote = db.get_bind().dialect.identifier_preparer.quote
+    columns = await db.execute(
+        text(
+            'SELECT table_name, column_name FROM information_schema.columns '
+            "WHERE table_schema = current_schema() AND data_type = 'json'"
+        )
+    )
+    for table, column in columns.all():
+        table, column = quote(table), quote(column)
+        # json keeps its input text verbatim, so the escape is findable without parsing every row.
+        rows = await db.execute(
+            text(f'SELECT ctid::text, {column}::text FROM {table} WHERE strpos({column}::text, :escape) > 0'),
+            {'escape': '\\u0000'},
+        )
+        for ctid, raw in rows.all():
+            value = JSONCodec.loads(raw)
+            cleaned = strip_unstorable_json(value)
+            if cleaned != value:
+                await db.execute(
+                    text(f'UPDATE {table} SET {column} = CAST(:value AS json) WHERE ctid = CAST(:ctid AS tid)'),
+                    {'value': dumps_json_for_db(cleaned), 'ctid': ctid},
+                )
+    await db.commit()
+
+
 class JSONField(types.TypeDecorator):  # TEXT-backed JSON storage
     """Store arbitrary Python objects as JSON-encoded TEXT.
 
@@ -133,13 +181,24 @@ class JSONField(types.TypeDecorator):  # TEXT-backed JSON storage
     cache_ok = True
 
     def process_bind_param(self, value: _T | None, dialect: Dialect) -> Any:
-        return JSONCodec.dumps(value) if value is not None else None
+        return dumps_json_for_db(value) if value is not None else None
 
     def process_result_value(self, value: _T | None, dialect: Dialect) -> Any:
         return JSONCodec.loads(value) if value is not None else None
 
     def copy(self, **kwargs: Any) -> Self:
         return JSONField(length=self.impl.length)
+
+
+if USE_SLIM:
+    if make_url(DATABASE_URL).get_backend_name() not in ('sqlite', 'postgresql', 'postgres'):
+        raise ValueError(
+            'Slim requires SQLite or PostgreSQL for DATABASE_URL. Use the standard image for other databases.'
+        )
+    if DATABASE_ENABLE_IAM_TOKEN_AUTH:
+        raise ValueError(
+            'AWS RDS IAM authentication requires the standard image. Slim supports PostgreSQL database credentials.'
+        )
 
 
 # Normalize SSL params from the URL once; the sync engine needs them
@@ -253,7 +312,7 @@ def _json_codec_kwargs(kwargs: dict) -> dict:
     Unlike ``JSONField``, those serialize through the engine, which otherwise uses
     stdlib ``json``. With ``ENABLE_ORJSON`` off JSONCodec is stdlib ``json`` anyway.
     """
-    kwargs.setdefault('json_serializer', JSONCodec.dumps)
+    kwargs.setdefault('json_serializer', dumps_json_for_db)
     kwargs.setdefault('json_deserializer', JSONCodec.loads)
     return kwargs
 
@@ -268,10 +327,8 @@ def _create_async_engine(*args, **kwargs):
     return create_async_engine(*args, **_json_codec_kwargs(kwargs))
 
 
-# ============================================================
-# SYNC ENGINE (used only for: startup migrations, config loading,
+# Sync engine (used only for: startup migrations, config loading,
 #              Alembic, peewee migration, health checks)
-# ============================================================
 
 # Handle SQLCipher URLs
 if SQLALCHEMY_DATABASE_URL.startswith('sqlite+sqlcipher://'):
@@ -336,15 +393,16 @@ elif 'sqlite' in SQLALCHEMY_DATABASE_URL:
             if compiled is False:
                 return False
             if compiled is None:
-                regex = []
+                segments = ['']
                 escaped = False
                 for char in pattern:
                     if escape and not escaped and char == escape:
                         escaped = True
                         continue
-                    regex.append(
-                        '.*' if not escaped and char == '%' else '.' if not escaped and char == '_' else re.escape(char)
-                    )
+                    if not escaped and char == '%':
+                        segments.append('')
+                    else:
+                        segments[-1] += '.' if not escaped and char == '_' else re.escape(char)
                     escaped = False
                 if escaped:
                     compiled = False
@@ -352,7 +410,11 @@ elif 'sqlite' in SQLALCHEMY_DATABASE_URL:
                         compiled_patterns.clear()
                     compiled_patterns[key] = compiled
                     return False
-                compiled = re.compile(''.join(regex), re.DOTALL)
+                # Atomic groups pin each middle segment to its first match, so '%' never backtracks.
+                regex = segments[0] + ''.join(f'(?>.*?{segment})' for segment in segments[1:-1])
+                if len(segments) > 1:
+                    regex += '.*' + segments[-1]
+                compiled = re.compile(regex, re.DOTALL)
                 if len(compiled_patterns) >= 512:
                     compiled_patterns.clear()
                 compiled_patterns[key] = compiled
@@ -425,9 +487,7 @@ def get_session():
 get_db = contextmanager(get_session)
 
 
-# ============================================================
-# ASYNC ENGINE (used for ALL runtime database operations)
-# ============================================================
+# Async engine (used for all runtime database operations)
 
 # psycopg (v3) speaks libpq natively — the full DATABASE_URL is passed
 # through as-is.  SSL params, ``options``, ``target_session_attrs``, etc.
@@ -459,6 +519,12 @@ if 'sqlite' in ASYNC_SQLALCHEMY_DATABASE_URL:
     @event.listens_for(async_engine.sync_engine, 'connect')
     def _set_sqlite_pragmas(dbapi_connection, connection_record):
         _apply_sqlite_pragmas(dbapi_connection)
+
+    @event.listens_for(async_engine.sync_engine, 'handle_error')
+    def _keep_connection_on_cancel(context):
+        # invalidating here would close the connection inside the cancelled task, and that close is lost
+        if isinstance(context.original_exception, asyncio.CancelledError):
+            context.is_disconnect = False
 else:
     if isinstance(DATABASE_POOL_SIZE, int):
         if DATABASE_POOL_SIZE > 0:
@@ -497,20 +563,14 @@ AsyncSessionLocal = async_sessionmaker(
 async def get_async_session():
     """Async session generator for FastAPI Depends()."""
     async with AsyncSessionLocal() as db:
-        try:
-            yield db
-        finally:
-            await db.close()
+        yield db
 
 
 @asynccontextmanager
 async def get_async_db():
     """Async context manager for use outside of FastAPI dependency injection."""
     async with AsyncSessionLocal() as db:
-        try:
-            yield db
-        finally:
-            await db.close()
+        yield db
 
 
 @asynccontextmanager

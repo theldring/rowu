@@ -101,6 +101,9 @@
 
 	let page = 1;
 
+	const sortState = (key, orderBy, direction) =>
+		orderBy === key ? (direction === 'asc' ? 'ascending' : 'descending') : 'none';
+
 	const setSortKey = (key: string) => {
 		if (orderBy === key) {
 			direction = direction === 'asc' ? 'desc' : 'asc';
@@ -293,8 +296,8 @@
 			on:change={handleFileChange}
 		/>
 
-		<div class="flex flex-1 h-fit items-center gap-2">
-			<div class="flex min-w-0 flex-1 items-center">
+		<div class="flex flex-1 flex-wrap h-fit items-center gap-2">
+			<div class="flex min-w-0 flex-1 basis-full items-center sm:basis-0">
 				<div class=" self-center mr-3">
 					<Search />
 				</div>
@@ -351,6 +354,8 @@
 					</DropdownMenu>
 				</div>
 			</Dropdown>
+
+			<slot name="filter" />
 		</div>
 	</div>
 
@@ -368,10 +373,14 @@
 						<tr class=" border-b-[1.5px] border-gray-50/50 dark:border-gray-800/10">
 							<th
 								scope="col"
-								class="px-2.5 py-1.5 cursor-pointer text-left w-8"
-								on:click={() => setSortKey(`group_id:${groupId}`)}
+								class="text-left w-8"
+								aria-sort={sortState(`group_id:${groupId}`, orderBy, direction)}
 							>
-								<div class="flex gap-1.5 items-center">
+								<button
+									type="button"
+									class="flex w-full gap-1.5 items-center px-2.5 py-1.5 uppercase"
+									on:click={() => setSortKey(`group_id:${groupId}`)}
+								>
 									{$i18n.t('MBR')}
 
 									{#if orderBy === `group_id:${groupId}`}
@@ -387,15 +396,15 @@
 											<ChevronUp className="size-2" />
 										</span>
 									{/if}
-								</div>
+								</button>
 							</th>
 
-							<th
-								scope="col"
-								class="px-2.5 py-1.5 cursor-pointer select-none"
-								on:click={() => setSortKey('name')}
-							>
-								<div class="flex gap-1.5 items-center">
+							<th scope="col" class="select-none" aria-sort={sortState('name', orderBy, direction)}>
+								<button
+									type="button"
+									class="flex w-full gap-1.5 items-center px-2.5 py-1.5 uppercase"
+									on:click={() => setSortKey('name')}
+								>
 									{$i18n.t('Name')}
 
 									{#if orderBy === 'name'}
@@ -411,14 +420,14 @@
 											<ChevronUp className="size-2" />
 										</span>
 									{/if}
-								</div>
+								</button>
 							</th>
-							<th
-								scope="col"
-								class="px-2.5 py-1.5 cursor-pointer select-none"
-								on:click={() => setSortKey('role')}
-							>
-								<div class="flex gap-1.5 items-center">
+							<th scope="col" class="select-none" aria-sort={sortState('role', orderBy, direction)}>
+								<button
+									type="button"
+									class="flex w-full gap-1.5 items-center px-2.5 py-1.5 uppercase"
+									on:click={() => setSortKey('role')}
+								>
 									{$i18n.t('Role')}
 
 									{#if orderBy === 'role'}
@@ -434,15 +443,19 @@
 											<ChevronUp className="size-2" />
 										</span>
 									{/if}
-								</div>
+								</button>
 							</th>
 
 							<th
 								scope="col"
-								class="px-2.5 py-1.5 cursor-pointer select-none"
-								on:click={() => setSortKey('last_active_at')}
+								class="select-none"
+								aria-sort={sortState('last_active_at', orderBy, direction)}
 							>
-								<div class="flex gap-1.5 items-center">
+								<button
+									type="button"
+									class="flex w-full gap-1.5 items-center px-2.5 py-1.5 uppercase"
+									on:click={() => setSortKey('last_active_at')}
+								>
 									{$i18n.t('Last Active')}
 
 									{#if orderBy === 'last_active_at'}
@@ -458,7 +471,7 @@
 											<ChevronUp className="size-2" />
 										</span>
 									{/if}
-								</div>
+								</button>
 							</th>
 						</tr>
 					</thead>
@@ -496,7 +509,16 @@
 								</td>
 
 								<td class=" px-3 py-1">
-									{dayjs(user.last_active_at * 1000).fromNow()}
+									<Tooltip
+										content={new Date(user.last_active_at * 1000).toLocaleString($i18n.language, {
+											dateStyle: 'medium',
+											timeStyle: 'long'
+										})}
+									>
+										{dayjs(user.last_active_at * 1000)
+											.locale($i18n.language)
+											.fromNow()}
+									</Tooltip>
 								</td>
 							</tr>
 						{/each}
